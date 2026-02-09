@@ -168,19 +168,74 @@ curl -X POST https://your-hub.up.railway.app/api/tasks \
 
 ## Hub 部署（管理员）
 
-### 环境变量
+### 一键部署到 Railway
+
+[![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/HF0v0p?referralCode=cdSfmj)
+
+> 点击按钮一键部署 Hub + Postgres，只需填入 Telegram Bot Token 即可运行。
+
+### 手动部署步骤
+
+#### 1. 创建 Railway 项目
+
+注册 [Railway](https://railway.com/?referralCode=cdSfmj) 并创建新项目。
+
+#### 2. 添加 Postgres 数据库
+
+在项目中点击 **New** → **Database** → **Postgres**，Railway 会自动创建并运行 Postgres 实例。
+
+#### 3. 部署 Hub 服务
+
+```bash
+# 安装 Railway CLI
+npm install -g @railway/cli
+
+# 登录
+railway login
+
+# 链接到项目
+railway link
+
+# 部署 Hub
+railway up --service hub
+```
+
+#### 4. 配置环境变量
+
+在 Railway Dashboard 中为 Hub 服务设置以下变量：
 
 | 变量 | 必填 | 说明 |
 |------|------|------|
-| `TELEGRAM_BOT_TOKEN` | 是 | Telegram Bot Token |
-| `DATABASE_URL` | 否 | Postgres 连接地址（推荐，持久化凭证和任务） |
-| `HUB_URL` | 否 | Hub 公开 WebSocket 地址（显示在 /register 回复中） |
-| `TELEGRAM_CHAT_ID` | 否 | 默认群聊 ID（确保重启后 API 任务能发到群聊） |
+| `TELEGRAM_BOT_TOKEN` | 是 | 从 [@BotFather](https://t.me/BotFather) 创建 Bot 获取 |
+| `DATABASE_URL` | 是 | 设为 `${{Postgres.DATABASE_URL}}`（引用 Railway Postgres 服务） |
+| `HUB_URL` | 否 | Hub 的公开 WebSocket 地址，如 `wss://xxx.up.railway.app` |
+| `TELEGRAM_CHAT_ID` | 否 | Telegram 群聊 ID（负数），确保重启后 API 任务能发到群聊 |
 | `HUB_SECRET` | 否 | Hub 密钥 |
 
-### Railway 部署
+> `DATABASE_URL` 使用 Railway 的引用变量语法 `${{Postgres.DATABASE_URL}}`，会自动解析为 Postgres 内网地址。
 
-项目已配置 Railway 部署，Hub 和 Postgres 运行在同一项目中。
+#### 5. 获取 Hub URL
+
+部署成功后，在 Railway Dashboard 中：
+
+1. 点击 Hub 服务 → **Settings** → **Networking**
+2. 在 **Public Networking** 下点击 **Generate Domain**
+3. Railway 会分配一个域名，如 `hub-production-xxxx.up.railway.app`
+4. 你的 Hub 地址：
+   - WebSocket: `wss://hub-production-xxxx.up.railway.app`（Daemon 连接用）
+   - HTTP API: `https://hub-production-xxxx.up.railway.app`（MCP 和 API 调用用）
+5. 将 `HUB_URL` 环境变量设为 `wss://hub-production-xxxx.up.railway.app`
+
+#### 6. 创建 Telegram Bot
+
+1. 在 Telegram 中找到 [@BotFather](https://t.me/BotFather)
+2. 发送 `/newbot`，按提示创建 Bot
+3. 复制获取的 Token，设置到 Hub 的 `TELEGRAM_BOT_TOKEN` 环境变量
+4. 将 Bot 添加到你的 Telegram 群组并设为管理员
+
+#### 7. 获取群聊 ID（可选）
+
+将 `@RawDataBot` 添加到群组，它会自动回复包含群聊 ID 的消息（格式为 `-100xxxxxxxxxx`）。记下后设置到 `TELEGRAM_CHAT_ID` 环境变量，然后把 `@RawDataBot` 从群里移除。
 
 ## 项目结构
 

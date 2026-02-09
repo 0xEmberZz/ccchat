@@ -176,9 +176,16 @@ curl -X POST https://your-hub.up.railway.app/api/tasks \
 
 #### 1. 创建 Telegram Bot
 
-1. 在 Telegram 中找到 [@BotFather](https://t.me/BotFather)，发送 `/newbot`
-2. 按提示设置 Bot 名称和用户名
-3. 复制获取的 Token（格式如 `123456:ABC-DEF...`）
+1. 打开 Telegram，搜索 **@BotFather**（[点击直达](https://t.me/BotFather)）
+2. 点击 **Start**，然后发送 `/newbot`
+3. BotFather 会问你 Bot 的**显示名称**，输入你想要的名字（如 `My Team Bot`）
+4. 接着会问 Bot 的**用户名**，必须以 `bot` 结尾（如 `my_team_ccchat_bot`）
+5. 创建成功后，BotFather 会回复一条消息，其中包含一串 **Token**：
+   ```
+   Use this token to access the HTTP API:
+   123456789:ABCDefGH-IJKlmnOPQRstUVwxyz
+   ```
+6. **复制这串 Token**，下一步部署时需要用到
 
 #### 2. 点击上方按钮部署
 

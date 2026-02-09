@@ -49,7 +49,7 @@ Bot 会返回你的专属 Token 和配置模板。
 
 ```json
 {
-  "hubUrl": "wss://<HUB_URL>",
+  "hubUrl": "Bot /register 回复中的地址",
   "agentName": "你的英文名",
   "token": "Bot 返回的 token",
   "workDir": "/你的/项目/目录",

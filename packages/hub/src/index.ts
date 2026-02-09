@@ -21,17 +21,18 @@ import { createApiHandler, onApiTaskCreated } from "./api.js"
 config()
 
 // 从环境变量读取配置
-function loadConfig(): { readonly port: number; readonly telegramBotToken: string; readonly hubUrl?: string; readonly databaseUrl?: string } {
+function loadConfig(): { readonly port: number; readonly telegramBotToken: string; readonly hubUrl?: string; readonly databaseUrl?: string; readonly telegramChatId?: number } {
   const port = parseInt(process.env.PORT ?? process.env.HUB_PORT ?? "9900", 10)
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN ?? ""
   const hubUrl = process.env.HUB_URL
   const databaseUrl = process.env.DATABASE_URL
+  const telegramChatId = process.env.TELEGRAM_CHAT_ID ? parseInt(process.env.TELEGRAM_CHAT_ID, 10) : undefined
 
   if (!telegramBotToken) {
     throw new Error("环境变量 TELEGRAM_BOT_TOKEN 未设置")
   }
 
-  return { port, telegramBotToken, hubUrl, databaseUrl }
+  return { port, telegramBotToken, hubUrl, databaseUrl, telegramChatId }
 }
 
 // 主启动函数
@@ -77,6 +78,7 @@ async function main(): Promise<void> {
     wsServer,
     hubConfig.hubUrl,
     agentStatusStore,
+    hubConfig.telegramChatId,
   )
 
   // 优雅退出（必须在 bot.start 前注册）

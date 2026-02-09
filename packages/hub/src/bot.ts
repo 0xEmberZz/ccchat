@@ -74,12 +74,13 @@ export function createBot(
   wsServer: WsServer,
   hubUrl?: string,
   agentStatusStore?: AgentStatusStore,
+  defaultChatId?: number,
 ): TelegramBot {
   const bot = new Bot(token)
   bot.catch((err) => {
     process.stderr.write(`Bot 错误: ${err instanceof Error ? err.message : String(err)}\n`)
   })
-  const activeChatIds = new Set<number>()
+  const activeChatIds = new Set<number>(defaultChatId ? [defaultChatId] : [])
   const paginator = createPaginator()
 
   // /register 命令：注册 Agent 并获取 token（必须私聊）
@@ -626,6 +627,13 @@ export function createBot(
 
   return {
     start: async () => {
+      await bot.api.setMyCommands([
+        { command: "register", description: "注册 Agent 并获取 Token（私聊）" },
+        { command: "token", description: "刷新 Token（私聊）" },
+        { command: "agents", description: "查看在线 Agent 列表" },
+        { command: "status", description: "查看任务状态" },
+        { command: "cancel", description: "取消任务" },
+      ])
       await bot.start()
     },
     stop: () => {

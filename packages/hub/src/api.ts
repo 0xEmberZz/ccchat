@@ -130,7 +130,7 @@ async function routeApi(
 
     // 创建任务（chatId 由 bot 回调填充）
     const task = taskQueue.createTask({
-      from: fromAgent,
+      from: `[${fromAgent} mcp]`,
       to,
       content,
       chatId: 0,

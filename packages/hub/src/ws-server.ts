@@ -53,6 +53,8 @@ export function createWsServer(
   let agentOnlineCallback: AgentStatusCallback | undefined
   let agentOfflineCallback: AgentStatusCallback | undefined
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
+  const lastOnlineNotify = new Map<string, number>()
+  const ONLINE_NOTIFY_DEBOUNCE = 60_000 // 60 秒内不重复通知
 
   // 发送消息给指定 Agent
   function sendToAgent(agentName: string, msg: HubToAgentMessage): boolean {
@@ -81,7 +83,12 @@ export function createWsServer(
     }
     registry.register(agentName, ws)
     ws.send(serialize({ type: "register_ack", success: true }))
-    agentOnlineCallback?.(agentName)
+    const now = Date.now()
+    const lastNotify = lastOnlineNotify.get(agentName) ?? 0
+    if (now - lastNotify > ONLINE_NOTIFY_DEBOUNCE) {
+      lastOnlineNotify.set(agentName, now)
+      agentOnlineCallback?.(agentName)
+    }
     // 发送离线期间积累的待处理任务
     deliverPendingTasks(agentName)
   }

@@ -4,8 +4,6 @@
 
 set -e
 
-HUB_URL="wss://<HUB_URL>"
-
 echo "=== CCChat Agent 安装 ==="
 echo ""
 
@@ -68,7 +66,7 @@ echo ""
 mkdir -p "$HOME/.ccchat"
 cat > "$HOME/.ccchat/config.json" << EOF
 {
-  "hubUrl": "${HUB_URL}",
+  "hubUrl": "<Hub 地址，从 Bot /register 回复中获取>",
   "agentName": "${AGENT_NAME}",
   "token": "<通过 Telegram Bot /register 获取>",
   "workDir": "${WORK_DIR}",

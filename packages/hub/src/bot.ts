@@ -67,6 +67,7 @@ export function createBot(
   registry: Registry,
   taskQueue: TaskQueue,
   wsServer: WsServer,
+  hubUrl?: string,
 ): TelegramBot {
   const bot = new Bot(token)
   const activeChatIds = new Set<number>()
@@ -103,7 +104,7 @@ export function createBot(
         `写入 ~/.ccchat/config.json:`,
         `\`\`\`json`,
         `{`,
-        `  "hubUrl": "wss://<HUB_URL>",`,
+        `  "hubUrl": "${hubUrl ?? "wss://<your-hub-url>"}",`,
         `  "agentName": "${agentName}",`,
         `  "token": "${newToken}",`,
         `  "workDir": "/your/project/dir"`,

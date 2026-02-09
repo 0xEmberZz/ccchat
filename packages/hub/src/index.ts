@@ -11,15 +11,16 @@ import { createBot } from "./bot.js"
 config()
 
 // 从环境变量读取配置
-function loadConfig(): { readonly port: number; readonly telegramBotToken: string } {
+function loadConfig(): { readonly port: number; readonly telegramBotToken: string; readonly hubUrl?: string } {
   const port = parseInt(process.env.PORT ?? process.env.HUB_PORT ?? "9900", 10)
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN ?? ""
+  const hubUrl = process.env.HUB_URL
 
   if (!telegramBotToken) {
     throw new Error("环境变量 TELEGRAM_BOT_TOKEN 未设置")
   }
 
-  return { port, telegramBotToken }
+  return { port, telegramBotToken, hubUrl }
 }
 
 // 主启动函数
@@ -36,6 +37,7 @@ async function main(): Promise<void> {
     registry,
     taskQueue,
     wsServer,
+    hubConfig.hubUrl,
   )
 
   // 优雅退出（必须在 bot.start 前注册）

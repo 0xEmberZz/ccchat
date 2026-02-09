@@ -1,0 +1,16 @@
+{
+  "name": "ccchat",
+  "version": "0.1.0",
+  "private": true,
+  "description": "CCChat - Cross-host Claude Code collaboration via Telegram",
+  "scripts": {
+    "build": "pnpm -r build",
+    "dev:hub": "pnpm --filter @ccchat/hub dev",
+    "dev:daemon": "pnpm --filter @ccchat/daemon dev",
+    "hub": "pnpm --filter @ccchat/hub start",
+    "daemon": "pnpm --filter @ccchat/daemon start"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

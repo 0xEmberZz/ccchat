@@ -71,18 +71,93 @@ export function createBot(
   const bot = new Bot(token)
   const activeChatIds = new Set<number>()
 
-  // /bind 命令：绑定 Telegram 用户到 Agent
-  bot.command("bind", async (ctx) => {
+  // /register 命令：注册 Agent 并获取 token（必须私聊）
+  bot.command("register", async (ctx) => {
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("请私聊我使用 /register 命令，token 不能在群里暴露。")
+      return
+    }
     const agentName = ctx.match?.trim()
-    if (!agentName) {
-      await ctx.reply("用法: /bind <agent名称>\n示例: /bind ember")
+    if (!agentName || !/^\w+$/.test(agentName)) {
+      await ctx.reply("用法: /register <agent名称>\n名称只能包含字母数字下划线\n示例: /register ember")
       return
     }
     const userId = ctx.from?.id
     if (!userId) return
 
-    registry.bindTelegramUser(agentName, userId)
-    await ctx.reply(`已绑定: Telegram 用户 → Agent "${agentName}"\n任务审批通知将私聊发送给你。`)
+    // 检查是否已被其他人注册
+    const existing = registry.getCredential(agentName)
+    if (existing && existing.telegramUserId !== userId) {
+      await ctx.reply(`Agent "${agentName}" 已被其他人注册。请换一个名称。`)
+      return
+    }
+
+    const newToken = registry.issueToken(agentName, userId)
+    await ctx.reply(
+      [
+        `✅ Agent "${agentName}" 注册成功！`,
+        ``,
+        `你的 Token（请妥善保管）:`,
+        `\`${newToken}\``,
+        ``,
+        `写入 ~/.ccchat/config.json:`,
+        `\`\`\`json`,
+        `{`,
+        `  "hubUrl": "wss://<HUB_URL>",`,
+        `  "agentName": "${agentName}",`,
+        `  "token": "${newToken}",`,
+        `  "workDir": "/your/project/dir"`,
+        `}`,
+        `\`\`\``,
+        ``,
+        `刷新 Token: /token refresh`,
+      ].join("\n"),
+      { parse_mode: "Markdown" },
+    )
+  })
+
+  // /token 命令：刷新 token（必须私聊）
+  bot.command("token", async (ctx) => {
+    if (ctx.chat.type !== "private") {
+      await ctx.reply("请私聊我使用 /token 命令。")
+      return
+    }
+    const sub = ctx.match?.trim()
+    const userId = ctx.from?.id
+    if (!userId) return
+
+    if (sub === "refresh") {
+      // 找到该用户拥有的 agent
+      const agents = registry.listAgents()
+      const credential = agents
+        .map((a) => registry.getCredential(a.name))
+        .find((c) => c?.telegramUserId === userId)
+
+      if (!credential) {
+        await ctx.reply("你还没有注册 Agent。请先使用 /register <名称>")
+        return
+      }
+
+      const newToken = registry.refreshToken(credential.agentName, userId)
+      if (!newToken) {
+        await ctx.reply("刷新失败，请重新注册。")
+        return
+      }
+
+      await ctx.reply(
+        [
+          `🔄 Token 已刷新！旧 Token 立即失效。`,
+          ``,
+          `新 Token:`,
+          `\`${newToken}\``,
+          ``,
+          `请更新 ~/.ccchat/config.json 并重启 Daemon。`,
+        ].join("\n"),
+        { parse_mode: "Markdown" },
+      )
+    } else {
+      await ctx.reply("用法: /token refresh")
+    }
   })
 
   // /agents 命令：列出在线 Agent

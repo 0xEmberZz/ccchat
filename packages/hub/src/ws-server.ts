@@ -66,7 +66,7 @@ export function createWsServer(
     agentName: string,
     token: string,
   ): void {
-    if (!registry.validateToken(token)) {
+    if (!registry.validateAgentToken(agentName, token)) {
       ws.send(serialize({ type: "register_ack", success: false, error: "无效的 token" }))
       ws.close()
       return

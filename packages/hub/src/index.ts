@@ -2,7 +2,6 @@
 
 import { createServer } from "node:http"
 import { config } from "dotenv"
-import type { HubConfig } from "@ccchat/shared"
 import { createRegistry } from "./registry.js"
 import { createTaskQueue } from "./task-queue.js"
 import { createWsServer } from "./ws-server.js"
@@ -12,19 +11,15 @@ import { createBot } from "./bot.js"
 config()
 
 // 从环境变量读取配置
-function loadConfig(): HubConfig {
+function loadConfig(): { readonly port: number; readonly telegramBotToken: string } {
   const port = parseInt(process.env.PORT ?? process.env.HUB_PORT ?? "9900", 10)
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN ?? ""
-  const hubSecret = process.env.HUB_SECRET ?? ""
 
   if (!telegramBotToken) {
     throw new Error("环境变量 TELEGRAM_BOT_TOKEN 未设置")
   }
-  if (!hubSecret) {
-    throw new Error("环境变量 HUB_SECRET 未设置")
-  }
 
-  return { port, telegramBotToken, hubSecret }
+  return { port, telegramBotToken }
 }
 
 // 主启动函数
@@ -32,7 +27,7 @@ async function main(): Promise<void> {
   const hubConfig = loadConfig()
 
   // 创建核心模块
-  const registry = createRegistry(hubConfig.hubSecret)
+  const registry = createRegistry()
   const taskQueue = createTaskQueue()
   const httpServer = createServer()
   const wsServer = createWsServer(httpServer, registry, taskQueue)

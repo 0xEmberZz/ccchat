@@ -172,70 +172,47 @@ curl -X POST https://your-hub.up.railway.app/api/tasks \
 
 [![Deploy on Railway](https://railway.com/button.svg)](https://railway.com/deploy/HF0v0p?referralCode=cdSfmj)
 
-> 点击按钮一键部署 Hub + Postgres，只需填入 Telegram Bot Token 即可运行。
+模板已包含 **Hub 服务 + Postgres 数据库**，`DATABASE_URL` 已自动配置。部署只需 3 步：
 
-### 手动部署步骤
+#### 1. 创建 Telegram Bot
 
-#### 1. 创建 Railway 项目
+1. 在 Telegram 中找到 [@BotFather](https://t.me/BotFather)，发送 `/newbot`
+2. 按提示设置 Bot 名称和用户名
+3. 复制获取的 Token（格式如 `123456:ABC-DEF...`）
 
-注册 [Railway](https://railway.com/?referralCode=cdSfmj) 并创建新项目。
+#### 2. 点击上方按钮部署
 
-#### 2. 添加 Postgres 数据库
+1. 点击 **Deploy on Railway** 按钮
+2. 在部署页面填入 `TELEGRAM_BOT_TOKEN`（步骤 1 获取的 Token）
+3. 点击 **Deploy**，等待部署完成
 
-在项目中点击 **New** → **Database** → **Postgres**，Railway 会自动创建并运行 Postgres 实例。
-
-#### 3. 部署 Hub 服务
-
-```bash
-# 安装 Railway CLI
-npm install -g @railway/cli
-
-# 登录
-railway login
-
-# 链接到项目
-railway link
-
-# 部署 Hub
-railway up --service hub
-```
-
-#### 4. 配置环境变量
-
-在 Railway Dashboard 中为 Hub 服务设置以下变量：
-
-| 变量 | 必填 | 说明 |
-|------|------|------|
-| `TELEGRAM_BOT_TOKEN` | 是 | 从 [@BotFather](https://t.me/BotFather) 创建 Bot 获取 |
-| `DATABASE_URL` | 是 | 设为 `${{Postgres.DATABASE_URL}}`（引用 Railway Postgres 服务） |
-| `HUB_URL` | 否 | Hub 的公开 WebSocket 地址，如 `wss://xxx.up.railway.app` |
-| `TELEGRAM_CHAT_ID` | 否 | Telegram 群聊 ID（负数），确保重启后 API 任务能发到群聊 |
-| `HUB_SECRET` | 否 | Hub 密钥 |
-
-> `DATABASE_URL` 使用 Railway 的引用变量语法 `${{Postgres.DATABASE_URL}}`，会自动解析为 Postgres 内网地址。
-
-#### 5. 获取 Hub URL
+#### 3. 获取 Hub URL
 
 部署成功后，在 Railway Dashboard 中：
 
 1. 点击 Hub 服务 → **Settings** → **Networking**
 2. 在 **Public Networking** 下点击 **Generate Domain**
-3. Railway 会分配一个域名，如 `hub-production-xxxx.up.railway.app`
+3. Railway 会分配一个域名，如 `hub-xxxx.up.railway.app`
 4. 你的 Hub 地址：
-   - WebSocket: `wss://hub-production-xxxx.up.railway.app`（Daemon 连接用）
-   - HTTP API: `https://hub-production-xxxx.up.railway.app`（MCP 和 API 调用用）
-5. 将 `HUB_URL` 环境变量设为 `wss://hub-production-xxxx.up.railway.app`
+   - **WebSocket**: `wss://hub-xxxx.up.railway.app`（Daemon 连接用）
+   - **HTTP API**: `https://hub-xxxx.up.railway.app`（MCP 和 API 调用用）
+5. 回到 Hub 服务的 **Variables**，添加 `HUB_URL=wss://hub-xxxx.up.railway.app`
 
-#### 6. 创建 Telegram Bot
+#### 4. 配置 Telegram 群组
 
-1. 在 Telegram 中找到 [@BotFather](https://t.me/BotFather)
-2. 发送 `/newbot`，按提示创建 Bot
-3. 复制获取的 Token，设置到 Hub 的 `TELEGRAM_BOT_TOKEN` 环境变量
-4. 将 Bot 添加到你的 Telegram 群组并设为管理员
+1. 将 Bot 添加到你的 Telegram 群组并设为**管理员**
+2. （可选）获取群聊 ID：将 `@RawDataBot` 加入群组，记下回复中的 ID（格式 `-100xxxxxxxxxx`），然后移除它
+3. （可选）在 Hub 的 Variables 中添加 `TELEGRAM_CHAT_ID=你的群聊ID`
 
-#### 7. 获取群聊 ID（可选）
+### 环境变量说明
 
-将 `@RawDataBot` 添加到群组，它会自动回复包含群聊 ID 的消息（格式为 `-100xxxxxxxxxx`）。记下后设置到 `TELEGRAM_CHAT_ID` 环境变量，然后把 `@RawDataBot` 从群里移除。
+| 变量 | 必填 | 说明 |
+|------|------|------|
+| `TELEGRAM_BOT_TOKEN` | 是 | Telegram Bot Token（从 @BotFather 获取） |
+| `DATABASE_URL` | 自动 | 模板已自动配置，引用 Postgres 服务 |
+| `HUB_URL` | 推荐 | Hub 的 WebSocket 地址（显示在 /register 回复中） |
+| `TELEGRAM_CHAT_ID` | 可选 | 群聊 ID，确保重启后 API 任务能发到群聊 |
+| `HUB_SECRET` | 可选 | Hub 密钥 |
 
 ## 项目结构
 

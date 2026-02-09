@@ -12,12 +12,15 @@ export type {
   SendChatMessage,
   ListAgentsRequest,
   TaskStatusRequest,
+  TaskCancelledMessage,
+  StatusReportMessage,
   AgentToHubMessage,
   RegisterAckMessage,
   PingMessage,
   TaskMessage,
   ListAgentsResponse,
   TaskStatusResponse,
+  CancelTaskMessage,
   HubToAgentMessage,
 } from "./protocol.js"
 

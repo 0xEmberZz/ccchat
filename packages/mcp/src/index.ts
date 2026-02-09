@@ -8,6 +8,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { HubClient } from "./hub-client.js"
+import { HubHttpClient } from "./http-client.js"
 import { registerTools } from "./tools.js"
 
 /** 命令行配置 */
@@ -15,6 +16,7 @@ interface CliConfig {
   readonly hubUrl: string
   readonly agentName: string
   readonly token: string
+  readonly hubApiUrl?: string
 }
 
 /** 从命令行参数和环境变量解析配置 */
@@ -30,6 +32,9 @@ function parseConfig(args: readonly string[]): CliConfig {
   const token = flagMap.get("--token")
     ?? process.env["CCCHAT_TOKEN"]
     ?? ""
+  const hubApiUrl = flagMap.get("--hub-api")
+    ?? process.env["CCCHAT_HUB_API_URL"]
+    ?? undefined
 
   if (!hubUrl) {
     throw new Error("缺少 --hub 参数或 CCCHAT_HUB_URL 环境变量")
@@ -41,7 +46,7 @@ function parseConfig(args: readonly string[]): CliConfig {
     throw new Error("缺少 --token 参数或 CCCHAT_TOKEN 环境变量")
   }
 
-  return { hubUrl, agentName, token }
+  return { hubUrl, agentName, token, hubApiUrl }
 }
 
 /** 将命令行参数解析为 flag -> value 映射 */
@@ -75,8 +80,13 @@ async function main(): Promise<void> {
     version: "0.1.0",
   })
 
+  // 创建 HTTP 客户端（可选，用于任务提交）
+  const httpClient = config.hubApiUrl
+    ? new HubHttpClient({ hubApiUrl: config.hubApiUrl, token: config.token })
+    : undefined
+
   // 注册工具
-  registerTools(server, hubClient)
+  registerTools(server, hubClient, httpClient)
 
   // 启动 stdio 传输
   const transport = new StdioServerTransport()

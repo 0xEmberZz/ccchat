@@ -1,4 +1,4 @@
-import { spawn } from "node:child_process"
+import { spawn, type ChildProcess } from "node:child_process"
 import type { DaemonConfig } from "@ccchat/shared"
 
 interface ExecutionResult {
@@ -6,13 +6,12 @@ interface ExecutionResult {
   readonly status: "success" | "error"
 }
 
-interface ExecutorState {
-  readonly runningCount: number
-}
-
 export interface Executor {
-  readonly execute: (taskContent: string) => Promise<ExecutionResult>
+  readonly execute: (taskId: string, taskContent: string) => Promise<ExecutionResult>
+  readonly cancel: (taskId: string) => boolean
   readonly getRunningCount: () => number
+  readonly getCurrentTaskId: () => string | undefined
+  readonly getRunningTaskIds: () => ReadonlyArray<string>
 }
 
 /** 截取输出结果（限制长度避免 Telegram 消息过长） */
@@ -26,29 +25,29 @@ function extractResult(rawOutput: string): string {
 function runClaude(
   taskContent: string,
   config: DaemonConfig,
-): Promise<ExecutionResult> {
-  return new Promise((resolve) => {
-    const timeout = config.taskTimeout ?? 300_000
-    // 如果有 systemPrompt，拼接到任务内容前面
-    const prompt = config.systemPrompt
-      ? `[系统角色] ${config.systemPrompt}\n\n[任务] ${taskContent}`
-      : taskContent
-    const args = ["-p", prompt, "--output-format", "text"]
+): { readonly child: ChildProcess; readonly result: Promise<ExecutionResult> } {
+  const timeout = config.taskTimeout ?? 300_000
+  // 如果有 systemPrompt，拼接到任务内容前面
+  const prompt = config.systemPrompt
+    ? `[系统角色] ${config.systemPrompt}\n\n[任务] ${taskContent}`
+    : taskContent
+  const args = ["-p", prompt, "--output-format", "text"]
 
-    const child = spawn("claude", args, {
-      cwd: config.workDir,
-      env: { ...process.env },
-      stdio: ["ignore", "pipe", "pipe"],
-    })
+  const child = spawn("claude", args, {
+    cwd: config.workDir,
+    env: { ...process.env },
+    stdio: ["ignore", "pipe", "pipe"],
+  })
 
+  const result = new Promise<ExecutionResult>((resolve) => {
     let stdout = ""
     let stderr = ""
 
-    child.stdout.on("data", (chunk: Buffer) => {
+    child.stdout?.on("data", (chunk: Buffer) => {
       stdout += chunk.toString()
     })
 
-    child.stderr.on("data", (chunk: Buffer) => {
+    child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString()
     })
 
@@ -61,9 +60,16 @@ function runClaude(
       })
     }, timeout)
 
-    child.on("close", (code) => {
+    child.on("close", (code, signal) => {
       clearTimeout(timer)
-      if (code === 0) {
+      if (signal === "SIGTERM" || signal === "SIGKILL") {
+        // 可能是取消或超时
+        const existing = stdout.trim()
+        resolve({
+          output: existing ? `${extractResult(existing)}\n\n(任务被取消)` : "任务已取消",
+          status: "error",
+        })
+      } else if (code === 0) {
         resolve({
           output: extractResult(stdout) || "(无输出)",
           status: "success",
@@ -84,32 +90,60 @@ function runClaude(
       })
     })
   })
+
+  return { child, result }
 }
 
-/** 创建执行器（含并发控制） */
+/** 创建执行器（含并发控制和取消支持） */
 export function createExecutor(config: DaemonConfig): Executor {
-  let state: ExecutorState = { runningCount: 0 }
   const maxConcurrent = config.maxConcurrentTasks ?? 1
+  const runningTasks = new Map<string, ChildProcess>()
 
   return {
-    async execute(taskContent: string): Promise<ExecutionResult> {
-      if (state.runningCount >= maxConcurrent) {
+    async execute(taskId: string, taskContent: string): Promise<ExecutionResult> {
+      if (runningTasks.size >= maxConcurrent) {
         return {
           output: `并发上限 (${maxConcurrent})，请稍后重试`,
           status: "error",
         }
       }
 
-      state = { runningCount: state.runningCount + 1 }
+      const { child, result } = runClaude(taskContent, config)
+      runningTasks.set(taskId, child)
+
       try {
-        const result = await runClaude(taskContent, config)
-        return result
+        const execResult = await result
+        return execResult
       } finally {
-        state = { runningCount: state.runningCount - 1 }
+        runningTasks.delete(taskId)
       }
     },
+
+    cancel(taskId: string): boolean {
+      const child = runningTasks.get(taskId)
+      if (!child) return false
+
+      child.kill("SIGTERM")
+      // 5 秒后强制 kill
+      setTimeout(() => {
+        if (runningTasks.has(taskId)) {
+          child.kill("SIGKILL")
+        }
+      }, 5_000)
+      return true
+    },
+
     getRunningCount(): number {
-      return state.runningCount
+      return runningTasks.size
+    },
+
+    getCurrentTaskId(): string | undefined {
+      const entries = Array.from(runningTasks.keys())
+      return entries[0]
+    },
+
+    getRunningTaskIds(): ReadonlyArray<string> {
+      return Array.from(runningTasks.keys())
     },
   }
 }

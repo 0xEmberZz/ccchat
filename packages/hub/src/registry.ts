@@ -1,6 +1,7 @@
-import { randomBytes } from "node:crypto"
+import { randomBytes, timingSafeEqual } from "node:crypto"
 import type { WebSocket } from "ws"
 import type { AgentInfo } from "@ccchat/shared"
+import type { CredentialRepo, CredentialRow } from "./db/index.js"
 
 // Agent 连接记录
 interface AgentConnection {
@@ -35,6 +36,7 @@ export interface Registry {
   readonly refreshToken: (agentName: string, telegramUserId: number) => string | null
   readonly revokeToken: (agentName: string) => void
   readonly validateAgentToken: (agentName: string, token: string) => boolean
+  readonly getAgentByToken: (token: string) => string | undefined
   readonly getCredential: (agentName: string) => AgentCredential | undefined
 
   // 连接管理
@@ -48,13 +50,64 @@ export interface Registry {
 
   // Telegram 绑定（从 credential 读取）
   readonly getTelegramUserId: (agentName: string) => number | undefined
+  readonly findCredentialByUserId: (userId: number) => AgentCredential | undefined
+
+  // 持久化
+  readonly loadFromRepo: () => Promise<void>
 }
 
-export function createRegistry(): Registry {
+export interface RegistryOptions {
+  readonly credentialRepo?: CredentialRepo
+}
+
+export function createRegistry(options?: RegistryOptions): Registry {
+  const repo = options?.credentialRepo
+
   let state: RegistryState = {
     connections: new Map(),
     credentials: new Map(),
     tokenIndex: new Map(),
+  }
+
+  // 异步持久化（fire-and-forget）
+  function persistSave(credential: AgentCredential): void {
+    if (!repo) return
+    const row: CredentialRow = {
+      agentName: credential.agentName,
+      token: credential.token,
+      telegramUserId: credential.telegramUserId,
+      createdAt: credential.createdAt,
+    }
+    repo.save(row).catch((err) => {
+      process.stderr.write(`DB credential save failed: ${err}\n`)
+    })
+  }
+
+  function persistDelete(agentName: string): void {
+    if (!repo) return
+    repo.delete(agentName).catch((err) => {
+      process.stderr.write(`DB credential delete failed: ${err}\n`)
+    })
+  }
+
+  // 从 DB 加载凭证
+  async function loadFromRepo(): Promise<void> {
+    if (!repo) return
+    const rows = await repo.loadAll()
+    const newCredentials = new Map(state.credentials)
+    const newIndex = new Map(state.tokenIndex)
+    for (const row of rows) {
+      const credential: AgentCredential = {
+        agentName: row.agentName,
+        token: row.token,
+        telegramUserId: row.telegramUserId,
+        createdAt: row.createdAt,
+      }
+      newCredentials.set(row.agentName, credential)
+      newIndex.set(row.token, row.agentName)
+    }
+    state = { ...state, credentials: newCredentials, tokenIndex: newIndex }
+    process.stdout.write(`Loaded ${rows.length} credentials from DB\n`)
   }
 
   // 为 Agent 签发 token（首次注册）
@@ -81,6 +134,7 @@ export function createRegistry(): Registry {
     newIndex.set(token, agentName)
     state = { ...state, credentials: newCredentials, tokenIndex: newIndex }
 
+    persistSave(credential)
     return token
   }
 
@@ -116,13 +170,22 @@ export function createRegistry(): Registry {
     const newIndex = new Map(state.tokenIndex)
     newIndex.delete(existing.token)
     state = { ...state, credentials: newCredentials, tokenIndex: newIndex }
+
+    persistDelete(agentName)
   }
 
-  // 验证 Agent 的 token
+  // 验证 Agent 的 token（常量时间比较，防时序攻击）
   function validateAgentToken(agentName: string, token: string): boolean {
     const credential = state.credentials.get(agentName)
     if (!credential) return false
-    return credential.token === token
+    const expected = Buffer.from(credential.token, "utf-8")
+    const received = Buffer.from(token, "utf-8")
+    if (expected.length !== received.length) return false
+    return timingSafeEqual(expected, received)
+  }
+
+  function getAgentByToken(token: string): string | undefined {
+    return state.tokenIndex.get(token)
   }
 
   function getCredential(agentName: string): AgentCredential | undefined {
@@ -185,11 +248,19 @@ export function createRegistry(): Registry {
     return state.credentials.get(agentName)?.telegramUserId
   }
 
+  function findCredentialByUserId(userId: number): AgentCredential | undefined {
+    for (const credential of state.credentials.values()) {
+      if (credential.telegramUserId === userId) return credential
+    }
+    return undefined
+  }
+
   return {
     issueToken,
     refreshToken,
     revokeToken,
     validateAgentToken,
+    getAgentByToken,
     getCredential,
     register,
     unregister,
@@ -199,5 +270,7 @@ export function createRegistry(): Registry {
     updateLastSeen,
     isOnline,
     getTelegramUserId,
+    findCredentialByUserId,
+    loadFromRepo,
   }
 }

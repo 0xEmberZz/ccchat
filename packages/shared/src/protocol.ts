@@ -36,6 +36,18 @@ export interface TaskStatusRequest {
   readonly taskId: string
 }
 
+export interface TaskCancelledMessage {
+  readonly type: "task_cancelled"
+  readonly taskId: string
+}
+
+export interface StatusReportMessage {
+  readonly type: "status_report"
+  readonly runningTasks: number
+  readonly currentTaskId?: string
+  readonly idleSince?: string
+}
+
 export type AgentToHubMessage =
   | RegisterMessage
   | PongMessage
@@ -43,6 +55,8 @@ export type AgentToHubMessage =
   | SendChatMessage
   | ListAgentsRequest
   | TaskStatusRequest
+  | TaskCancelledMessage
+  | StatusReportMessage
 
 // ─── Hub -> Agent Messages ───
 
@@ -77,12 +91,18 @@ export interface TaskStatusResponse {
   readonly task: TaskInfo | null
 }
 
+export interface CancelTaskMessage {
+  readonly type: "cancel_task"
+  readonly taskId: string
+}
+
 export type HubToAgentMessage =
   | RegisterAckMessage
   | PingMessage
   | TaskMessage
   | ListAgentsResponse
   | TaskStatusResponse
+  | CancelTaskMessage
 
 // ─── Helpers ───
 

@@ -7,9 +7,11 @@ import {
   type AgentToHubMessage,
   type HubToAgentMessage,
   type TaskMessage,
+  type CancelTaskMessage,
 } from "@ccchat/shared"
 import type { Registry } from "./registry.js"
 import type { TaskQueue } from "./task-queue.js"
+import type { AgentStatusStore } from "./agent-status-store.js"
 
 // 心跳间隔 30 秒
 const HEARTBEAT_INTERVAL = 30_000
@@ -25,11 +27,14 @@ export type TaskResultCallback = (
 
 export type AgentStatusCallback = (agentName: string) => void
 
+export type TaskCancelledCallback = (taskId: string, agentName: string) => void
+
 // WsServer 对外 API
 export interface WsServer {
   readonly sendToAgent: (agentName: string, msg: HubToAgentMessage) => boolean
-  readonly dispatchTask: (task: TaskMessage) => boolean
+  readonly cancelTask: (agentName: string, taskId: string) => boolean
   readonly onTaskResult: (callback: TaskResultCallback) => void
+  readonly onTaskCancelled: (callback: TaskCancelledCallback) => void
   readonly onAgentOnline: (callback: AgentStatusCallback) => void
   readonly onAgentOffline: (callback: AgentStatusCallback) => void
   readonly close: () => void
@@ -40,9 +45,11 @@ export function createWsServer(
   httpServer: HttpServer,
   registry: Registry,
   taskQueue: TaskQueue,
+  agentStatusStore?: AgentStatusStore,
 ): WsServer {
   const wss = new WebSocketServer({ server: httpServer })
   let taskResultCallback: TaskResultCallback | undefined
+  let taskCancelledCallback: TaskCancelledCallback | undefined
   let agentOnlineCallback: AgentStatusCallback | undefined
   let agentOfflineCallback: AgentStatusCallback | undefined
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
@@ -53,11 +60,6 @@ export function createWsServer(
     if (!conn || conn.ws.readyState !== WebSocket.OPEN) return false
     conn.ws.send(serialize(msg))
     return true
-  }
-
-  // 分发任务给 Agent
-  function dispatchTask(task: TaskMessage): boolean {
-    return sendToAgent(task.from, task) // 注意：task 发送给 to 对应的 agent
   }
 
   // 处理注册消息
@@ -84,10 +86,19 @@ export function createWsServer(
     deliverPendingTasks(agentName)
   }
 
-  // 发送积压的待处理任务
+  // 发送积压的待处理任务（仅分发已审批的任务）
   function deliverPendingTasks(agentName: string): void {
     const pending = taskQueue.getPendingTasks(agentName)
     for (const task of pending) {
+      // 跳过已取消/已拒绝的任务
+      if (task.status === "cancelled" || task.status === "rejected" || task.status === "completed" || task.status === "failed") {
+        taskQueue.removePending(agentName, task.taskId)
+        continue
+      }
+      // 只分发已审批的任务，未审批的留在队列中等待
+      if (task.status !== "approved") {
+        continue
+      }
       const msg: TaskMessage = {
         type: "task",
         taskId: task.taskId,
@@ -115,7 +126,14 @@ export function createWsServer(
     if (!task) return
     const finalStatus = status === "success" ? "completed" : "failed"
     taskQueue.updateStatus(taskId, finalStatus, result)
+    agentStatusStore?.incrementCompleted(agentName)
     taskResultCallback?.(taskId, result, status, task.chatId, task.messageId)
+  }
+
+  // 发送取消指令给 Agent
+  function cancelTask(agentName: string, taskId: string): boolean {
+    const msg: CancelTaskMessage = { type: "cancel_task", taskId }
+    return sendToAgent(agentName, msg)
   }
 
   // 处理列出 Agent 请求
@@ -149,10 +167,26 @@ export function createWsServer(
         if (agentName) handleTaskResult(agentName, msg.taskId, msg.result, msg.status)
         return
       case "list_agents":
-        handleListAgents(ws, msg.requestId)
+        if (agentName) handleListAgents(ws, msg.requestId)
         return
       case "task_status":
-        handleTaskStatus(ws, msg.requestId, msg.taskId)
+        if (agentName) handleTaskStatus(ws, msg.requestId, msg.taskId)
+        return
+      case "task_cancelled":
+        if (agentName) {
+          taskQueue.updateStatus(msg.taskId, "cancelled")
+          agentStatusStore?.incrementCompleted(agentName)
+          taskCancelledCallback?.(msg.taskId, agentName)
+        }
+        return
+      case "status_report":
+        if (agentName && agentStatusStore) {
+          agentStatusStore.update(agentName, {
+            runningTasks: msg.runningTasks,
+            currentTaskId: msg.currentTaskId,
+            idleSince: msg.idleSince,
+          })
+        }
         return
       case "send_message":
         // Agent 间消息传递（暂不处理，预留扩展）
@@ -163,11 +197,16 @@ export function createWsServer(
   // 处理新连接
   function handleConnection(ws: WebSocket, _req: IncomingMessage): void {
     ws.on("message", (data: Buffer) => {
+      let msg: AgentToHubMessage
       try {
-        const msg = parseAgentMessage(data.toString())
-        routeMessage(ws, msg)
+        msg = parseAgentMessage(data.toString())
       } catch {
-        // 忽略格式错误的消息
+        return // 忽略格式错误的消息
+      }
+      try {
+        routeMessage(ws, msg)
+      } catch (err) {
+        process.stderr.write(`Message routing error: ${err}\n`)
       }
     })
 
@@ -204,14 +243,12 @@ export function createWsServer(
 
   return {
     sendToAgent,
-    dispatchTask: (task: TaskMessage) => {
-      // task.from 是发起者，这里要发给目标 Agent（根据 task 关联的 to）
-      const taskInfo = taskQueue.getTask(task.taskId)
-      if (!taskInfo) return false
-      return sendToAgent(taskInfo.to, task)
-    },
+    cancelTask,
     onTaskResult: (callback: TaskResultCallback) => {
       taskResultCallback = callback
+    },
+    onTaskCancelled: (callback: TaskCancelledCallback) => {
+      taskCancelledCallback = callback
     },
     onAgentOnline: (callback: AgentStatusCallback) => {
       agentOnlineCallback = callback

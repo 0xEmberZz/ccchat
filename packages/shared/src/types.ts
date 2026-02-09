@@ -11,12 +11,15 @@ export interface TaskInfo {
   readonly from: string
   readonly to: string
   readonly content: string
-  readonly status: "pending" | "awaiting_approval" | "approved" | "running" | "completed" | "failed" | "rejected"
+  readonly status: "pending" | "awaiting_approval" | "approved" | "running" | "completed" | "failed" | "rejected" | "cancelled"
   readonly result?: string
   readonly createdAt: string
   readonly completedAt?: string
   readonly chatId: number
   readonly messageId: number
+  readonly conversationId?: string
+  readonly parentTaskId?: string
+  readonly resultMessageId?: number
 }
 
 export interface DaemonConfig {

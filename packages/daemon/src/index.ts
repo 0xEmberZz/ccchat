@@ -3,18 +3,18 @@
 import type { HubToAgentMessage, TaskMessage, DaemonConfig } from "@ccchat/shared"
 import { loadConfig, initConfig, getConfigPath } from "./config.js"
 import { createWsClient } from "./ws-client.js"
-import { createExecutor } from "./executor.js"
+import { createExecutor, type Executor } from "./executor.js"
 
 /** 处理任务消息 */
 async function handleTask(
   task: TaskMessage,
   config: DaemonConfig,
   send: (msg: import("@ccchat/shared").AgentToHubMessage) => void,
-  executor: ReturnType<typeof createExecutor>,
+  executor: Executor,
 ): Promise<void> {
-  console.log(`收到任务 [${task.taskId}] 来自 ${task.from}: ${task.content.slice(0, 80)}`)
+  process.stdout.write(`收到任务 [${task.taskId}] 来自 ${task.from}: ${task.content.slice(0, 80)}\n`)
 
-  const result = await executor.execute(task.content)
+  const result = await executor.execute(task.taskId, task.content)
 
   send({
     type: "task_result",
@@ -23,35 +23,73 @@ async function handleTask(
     status: result.status,
   })
 
-  console.log(`任务 [${task.taskId}] 完成: ${result.status}`)
+  process.stdout.write(`任务 [${task.taskId}] 完成: ${result.status}\n`)
+}
+
+/** 处理取消任务消息 */
+function handleCancelTask(
+  taskId: string,
+  send: (msg: import("@ccchat/shared").AgentToHubMessage) => void,
+  executor: Executor,
+): void {
+  process.stdout.write(`收到取消请求: ${taskId}\n`)
+  const cancelled = executor.cancel(taskId)
+  if (cancelled) {
+    send({ type: "task_cancelled", taskId })
+    process.stdout.write(`任务 [${taskId}] 已取消\n`)
+  } else {
+    process.stdout.write(`任务 [${taskId}] 未在运行，无法取消\n`)
+  }
 }
 
 /** 启动 daemon */
 async function startDaemon(): Promise<void> {
   const config = loadConfig()
   if (!config) {
-    console.error("未找到配置文件，请先运行: ccchat init")
+    process.stderr.write("未找到配置文件，请先运行: ccchat init\n")
     process.exit(1)
   }
 
-  console.log(`启动 CCChat Daemon...`)
-  console.log(`Agent: ${config.agentName}`)
-  console.log(`Hub: ${config.hubUrl}`)
-  console.log(`工作目录: ${config.workDir}`)
+  process.stdout.write(`启动 CCChat Daemon...\n`)
+  process.stdout.write(`Agent: ${config.agentName}\n`)
+  process.stdout.write(`Hub: ${config.hubUrl}\n`)
+  process.stdout.write(`工作目录: ${config.workDir}\n`)
 
   const executor = createExecutor(config)
+  let idleSince: string | undefined = new Date().toISOString()
 
   const client = createWsClient(config, {
     onMessage(msg: HubToAgentMessage): void {
       if (msg.type === "task") {
+        idleSince = undefined
         handleTask(msg, config, client.send, executor)
+          .then(() => {
+            if (executor.getRunningCount() === 0) {
+              idleSince = new Date().toISOString()
+            }
+          })
+          .catch((err: unknown) => {
+            const errMsg = err instanceof Error ? err.message : String(err)
+            process.stderr.write(`Task execution failed: ${errMsg}\n`)
+          })
+      } else if (msg.type === "cancel_task") {
+        handleCancelTask(msg.taskId, client.send, executor)
       }
+    },
+    onPing(): void {
+      // 每次收到 ping 时附带发送状态报告
+      client.send({
+        type: "status_report",
+        runningTasks: executor.getRunningCount(),
+        currentTaskId: executor.getCurrentTaskId(),
+        idleSince,
+      })
     },
   })
 
   // 优雅退出
   function shutdown(): void {
-    console.log("\n正在退出...")
+    process.stdout.write("\n正在退出...\n")
     client.close()
     process.exit(0)
   }
@@ -66,31 +104,30 @@ async function startDaemon(): Promise<void> {
 function showStatus(): void {
   const config = loadConfig()
   if (!config) {
-    console.log("状态: 未配置")
-    console.log(`配置文件: ${getConfigPath()} (不存在)`)
+    process.stdout.write("状态: 未配置\n")
+    process.stdout.write(`配置文件: ${getConfigPath()} (不存在)\n`)
     return
   }
 
-  console.log("--- CCChat 状态 ---")
-  console.log(`配置文件: ${getConfigPath()}`)
-  console.log(`Agent: ${config.agentName}`)
-  console.log(`Hub: ${config.hubUrl}`)
-  console.log(`工作目录: ${config.workDir}`)
-  console.log(`最大并发: ${config.maxConcurrentTasks ?? 1}`)
-  console.log(`任务超时: ${(config.taskTimeout ?? 300_000) / 1000}s`)
+  process.stdout.write("--- CCChat 状态 ---\n")
+  process.stdout.write(`配置文件: ${getConfigPath()}\n`)
+  process.stdout.write(`Agent: ${config.agentName}\n`)
+  process.stdout.write(`Hub: ${config.hubUrl}\n`)
+  process.stdout.write(`工作目录: ${config.workDir}\n`)
+  process.stdout.write(`最大并发: ${config.maxConcurrentTasks ?? 1}\n`)
+  process.stdout.write(`任务超时: ${(config.taskTimeout ?? 300_000) / 1000}s\n`)
 }
 
 /** 打印帮助信息 */
 function printHelp(): void {
-  console.log(`
-CCChat - 跨主机 Claude Code 协作工具
+  process.stdout.write(`CCChat - 跨主机 Claude Code 协作工具
 
 用法:
   ccchat start    启动 daemon 进程
   ccchat init     初始化配置
   ccchat status   显示当前状态
   ccchat help     显示帮助信息
-`.trim())
+`)
 }
 
 /** 解析命令行并执行 */
@@ -113,13 +150,13 @@ async function main(): Promise<void> {
       printHelp()
       break
     default:
-      console.error(`未知命令: ${command}`)
+      process.stderr.write(`未知命令: ${command}\n`)
       printHelp()
       process.exit(1)
   }
 }
 
 main().catch((err: Error) => {
-  console.error("致命错误:", err.message)
+  process.stderr.write(`致命错误: ${err.message}\n`)
   process.exit(1)
 })

@@ -58,7 +58,7 @@ export async function initConfig(): Promise<DaemonConfig> {
   })
 
   try {
-    console.log("--- CCChat 配置初始化 ---\n")
+    process.stdout.write("--- CCChat 配置初始化 ---\n\n")
 
     const hubUrl = await ask(rl, "Hub 服务器地址", "ws://localhost:9900")
     const agentName = await ask(rl, "Agent 名称")
@@ -75,7 +75,7 @@ export async function initConfig(): Promise<DaemonConfig> {
     }
 
     saveConfig(config)
-    console.log(`\n配置已保存到 ${CONFIG_FILE}`)
+    process.stdout.write(`\n配置已保存到 ${CONFIG_FILE}\n`)
     return config
   } finally {
     rl.close()

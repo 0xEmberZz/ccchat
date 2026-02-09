@@ -17,6 +17,7 @@ interface WsClientCallbacks {
   readonly onMessage: MessageHandler
   readonly onConnected?: ConnectionHandler
   readonly onDisconnected?: ConnectionHandler
+  readonly onPing?: () => void
 }
 
 interface WsClientState {
@@ -59,7 +60,7 @@ export function createWsClient(
 
     ws.on("open", () => {
       state = { ...state, ws, retryCount: 0, registered: false }
-      console.log(`已连接到 Hub: ${config.hubUrl}`)
+      process.stdout.write(`已连接到 Hub: ${config.hubUrl}\n`)
 
       // 发送注册消息
       const registerMsg: AgentToHubMessage = {
@@ -79,14 +80,14 @@ export function createWsClient(
       const wasRegistered = state.registered
       state = { ...state, ws: null, registered: false }
       if (wasRegistered) {
-        console.log("与 Hub 断开连接")
+        process.stdout.write("与 Hub 断开连接\n")
       }
       callbacks.onDisconnected?.()
       scheduleReconnect()
     })
 
     ws.on("error", (err) => {
-      console.error("WebSocket 错误:", err.message)
+      process.stderr.write(`WebSocket 错误: ${err.message}\n`)
     })
   }
 
@@ -96,7 +97,7 @@ export function createWsClient(
       const msg = parseHubMessage(data.toString())
       handleMessage(msg)
     } catch (err) {
-      console.error("消息解析失败:", err)
+      process.stderr.write(`消息解析失败: ${err}\n`)
     }
   }
 
@@ -105,6 +106,7 @@ export function createWsClient(
     // 处理心跳
     if (msg.type === "ping") {
       sendRaw({ type: "pong" })
+      callbacks.onPing?.()
       return
     }
 
@@ -112,9 +114,9 @@ export function createWsClient(
     if (msg.type === "register_ack") {
       if (msg.success) {
         state = { ...state, registered: true }
-        console.log(`注册成功, Agent: ${config.agentName}`)
+        process.stdout.write(`注册成功, Agent: ${config.agentName}\n`)
       } else {
-        console.error(`注册失败: ${msg.error ?? "未知错误"}`)
+        process.stderr.write(`注册失败: ${msg.error ?? "未知错误"}\n`)
       }
       return
     }
@@ -128,7 +130,7 @@ export function createWsClient(
     if (state.stopped) return
     const delay = calcRetryDelay(state.retryCount)
     state = { ...state, retryCount: state.retryCount + 1 }
-    console.log(`${delay}ms 后重连 (第 ${state.retryCount} 次)...`)
+    process.stdout.write(`${delay}ms 后重连 (第 ${state.retryCount} 次)...\n`)
     setTimeout(connect, delay)
   }
 

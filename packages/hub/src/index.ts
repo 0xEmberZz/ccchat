@@ -6,38 +6,77 @@ import { createRegistry } from "./registry.js"
 import { createTaskQueue } from "./task-queue.js"
 import { createWsServer } from "./ws-server.js"
 import { createBot } from "./bot.js"
+import {
+  createPool,
+  runMigrations,
+  createCredentialRepo,
+  createFileCredentialRepo,
+  createTaskRepo,
+  type DbPool,
+} from "./db/index.js"
+import { createAgentStatusStore } from "./agent-status-store.js"
+import { createApiHandler, onApiTaskCreated } from "./api.js"
 
 // 加载环境变量
 config()
 
 // 从环境变量读取配置
-function loadConfig(): { readonly port: number; readonly telegramBotToken: string; readonly hubUrl?: string } {
+function loadConfig(): { readonly port: number; readonly telegramBotToken: string; readonly hubUrl?: string; readonly databaseUrl?: string } {
   const port = parseInt(process.env.PORT ?? process.env.HUB_PORT ?? "9900", 10)
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN ?? ""
   const hubUrl = process.env.HUB_URL
+  const databaseUrl = process.env.DATABASE_URL
 
   if (!telegramBotToken) {
     throw new Error("环境变量 TELEGRAM_BOT_TOKEN 未设置")
   }
 
-  return { port, telegramBotToken, hubUrl }
+  return { port, telegramBotToken, hubUrl, databaseUrl }
 }
 
 // 主启动函数
 async function main(): Promise<void> {
   const hubConfig = loadConfig()
 
+  // 初始化数据库（可选）
+  let pool: DbPool | undefined
+  let credentialRepo
+  let taskRepo
+
+  if (hubConfig.databaseUrl) {
+    process.stdout.write("检测到 DATABASE_URL，启用 Postgres 持久化\n")
+    pool = createPool(hubConfig.databaseUrl)
+    await runMigrations(pool)
+    credentialRepo = createCredentialRepo(pool)
+    taskRepo = createTaskRepo(pool)
+  } else {
+    process.stdout.write("未设置 DATABASE_URL，使用文件备份凭证\n")
+    credentialRepo = createFileCredentialRepo()
+  }
+
   // 创建核心模块
-  const registry = createRegistry()
-  const taskQueue = createTaskQueue()
-  const httpServer = createServer()
-  const wsServer = createWsServer(httpServer, registry, taskQueue)
+  const registry = createRegistry({ credentialRepo })
+  const taskQueue = createTaskQueue({ taskRepo })
+  const agentStatusStore = createAgentStatusStore()
+
+  // 从持久化层加载数据
+  await registry.loadFromRepo()
+  if (pool) {
+    await taskQueue.loadFromRepo()
+  }
+
+  const apiHandler = createApiHandler({ registry, taskQueue })
+  const httpServer = createServer((req, res) => {
+    apiHandler(req, res)
+  })
+  const wsServer = createWsServer(httpServer, registry, taskQueue, agentStatusStore)
   const bot = createBot(
     hubConfig.telegramBotToken,
     registry,
     taskQueue,
     wsServer,
     hubConfig.hubUrl,
+    agentStatusStore,
   )
 
   // 优雅退出（必须在 bot.start 前注册）
@@ -46,8 +85,15 @@ async function main(): Promise<void> {
     bot.stop()
     wsServer.close()
     httpServer.close(() => {
-      process.stdout.write("服务已关闭\n")
-      process.exit(0)
+      if (pool) {
+        pool.end().then(() => {
+          process.stdout.write("数据库连接已关闭\n")
+          process.exit(0)
+        })
+      } else {
+        process.stdout.write("服务已关闭\n")
+        process.exit(0)
+      }
     })
   }
 

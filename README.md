@@ -49,7 +49,7 @@ pnpm -r build
 
 ### 步骤 2: 注册 Agent
 
-私聊 Telegram Bot [@vergexchatbot](https://t.me/vergexchatbot)，发送：
+私聊你团队部署的 Telegram Bot，发送：
 
 ```
 /register <你的英文名>
@@ -142,7 +142,7 @@ claude mcp add ccchat -- npx tsx /path/to/ccchat/packages/mcp/src/index.ts \
 curl -X POST https://your-hub.up.railway.app/api/tasks \
   -H "Content-Type: application/json" \
   -H "Authorization: Bearer your_token" \
-  -d '{"to": "ember_bot", "content": "帮我检查代码"}'
+  -d '{"to": "agent_name", "content": "帮我检查代码"}'
 ```
 
 ## Telegram Bot 命令

@@ -5,7 +5,6 @@
 set -e
 
 HUB_URL="wss://<HUB_URL>"
-TOKEN="<TOKEN_PLACEHOLDER>"
 
 echo "=== CCChat Agent 安装 ==="
 echo ""
@@ -53,13 +52,25 @@ WORK_DIR="${WORK_DIR:-$(pwd)}"
 
 SYSTEM_PROMPT="你是 ${AGENT_NAME} 的 Claude Agent，${ROLE_DESC}。当别人问你是谁时，介绍你的角色和职责。总是用中文回复。"
 
-# 写入配置
+echo ""
+echo "=== 安装完成 ==="
+echo ""
+echo "接下来请完成以下步骤:"
+echo ""
+echo "1. 私聊 Telegram Bot @vergexchatbot 发送:"
+echo "   /register ${AGENT_NAME}"
+echo ""
+echo "2. Bot 会返回你的专属 Token，将它写入配置文件:"
+echo "   ~/.ccchat/config.json"
+echo ""
+
+# 写入配置（token 留空，需通过 Bot 获取）
 mkdir -p "$HOME/.ccchat"
 cat > "$HOME/.ccchat/config.json" << EOF
 {
   "hubUrl": "${HUB_URL}",
   "agentName": "${AGENT_NAME}",
-  "token": "${TOKEN}",
+  "token": "<通过 Telegram Bot /register 获取>",
   "workDir": "${WORK_DIR}",
   "systemPrompt": "${SYSTEM_PROMPT}",
   "maxConcurrentTasks": 1,
@@ -67,17 +78,10 @@ cat > "$HOME/.ccchat/config.json" << EOF
 }
 EOF
 
+echo "3. 获取 Token 后，编辑 ~/.ccchat/config.json 填入 token"
 echo ""
-echo "=== 安装完成 ==="
+echo "4. 启动 Agent:"
+echo "   cd $INSTALL_DIR && npx tsx packages/daemon/src/index.ts start"
 echo ""
-echo "配置文件: ~/.ccchat/config.json"
-echo "Agent 名称: ${AGENT_NAME}"
-echo ""
-echo "启动命令:"
-echo "  cd $INSTALL_DIR && npx tsx packages/daemon/src/index.ts start"
-echo ""
-echo "Telegram 群里操作:"
-echo "  1. 私聊 @vergexchatbot 发送 /start"
-echo "  2. 群里发送: /bind ${AGENT_NAME}"
-echo "  3. 别人就可以 @${AGENT_NAME} 给你派任务了"
+echo "5. 在 Telegram 群里，别人就可以 @${AGENT_NAME} 给你派任务了"
 echo ""

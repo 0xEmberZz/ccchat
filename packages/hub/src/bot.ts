@@ -70,6 +70,9 @@ export function createBot(
   hubUrl?: string,
 ): TelegramBot {
   const bot = new Bot(token)
+  bot.catch((err) => {
+    process.stderr.write(`Bot 错误: ${err instanceof Error ? err.message : String(err)}\n`)
+  })
   const activeChatIds = new Set<number>()
 
   // /register 命令：注册 Agent 并获取 token（必须私聊）
@@ -94,26 +97,24 @@ export function createBot(
     }
 
     const newToken = registry.issueToken(agentName, userId)
+    const hubDisplay = hubUrl ?? "(请联系管理员获取 Hub 地址)"
     await ctx.reply(
       [
-        `✅ Agent "${agentName}" 注册成功！`,
+        `Agent "${agentName}" 注册成功！`,
         ``,
-        `你的 Token（请妥善保管）:`,
-        `\`${newToken}\``,
+        `Token（请妥善保管）:`,
+        newToken,
         ``,
         `写入 ~/.ccchat/config.json:`,
-        `\`\`\`json`,
         `{`,
-        `  "hubUrl": "${hubUrl ?? "wss://<your-hub-url>"}",`,
+        `  "hubUrl": "${hubDisplay}",`,
         `  "agentName": "${agentName}",`,
         `  "token": "${newToken}",`,
         `  "workDir": "/your/project/dir"`,
         `}`,
-        `\`\`\``,
         ``,
         `刷新 Token: /token refresh`,
       ].join("\n"),
-      { parse_mode: "Markdown" },
     )
   })
 
@@ -147,14 +148,13 @@ export function createBot(
 
       await ctx.reply(
         [
-          `🔄 Token 已刷新！旧 Token 立即失效。`,
+          `Token 已刷新！旧 Token 立即失效。`,
           ``,
           `新 Token:`,
-          `\`${newToken}\``,
+          newToken,
           ``,
           `请更新 ~/.ccchat/config.json 并重启 Daemon。`,
         ].join("\n"),
-        { parse_mode: "Markdown" },
       )
     } else {
       await ctx.reply("用法: /token refresh")

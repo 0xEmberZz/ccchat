@@ -37,7 +37,7 @@ if [ -d "$INSTALL_DIR" ]; then
   cd "$INSTALL_DIR" && git pull
 else
   echo "克隆 CCChat..."
-  git clone <YOUR_REPO_URL> "$INSTALL_DIR"
+  git clone https://github.com/0xEmberZz/ccchat.git "$INSTALL_DIR"
 fi
 
 cd "$INSTALL_DIR"

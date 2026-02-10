@@ -627,6 +627,9 @@ export function createBot(
     const mention = parseMention(text, bot.botInfo?.username)
     if (!mention) return
 
+    // 只有已注册的 agent 才触发任务流程，否则忽略（可能是 @群成员）
+    if (!registry.getCredential(mention.agentName)) return
+
     await handleNewTask({
       agentName: mention.agentName,
       content: mention.content,
@@ -647,6 +650,7 @@ export function createBot(
 
     const mention = parseMention(caption, bot.botInfo?.username)
     if (!mention) return
+    if (!registry.getCredential(mention.agentName)) return
 
     const chatId = ctx.chat.id
     const messageId = ctx.message.message_id
@@ -690,6 +694,7 @@ export function createBot(
 
     const mention = parseMention(caption, bot.botInfo?.username)
     if (!mention) return
+    if (!registry.getCredential(mention.agentName)) return
 
     const chatId = ctx.chat.id
     const messageId = ctx.message.message_id

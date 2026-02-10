@@ -154,11 +154,26 @@ export function createBot(
     replyToMsgId: number
     progressMsgId?: number
     lastUpdateAt: number
+    createdAt: number
   }>()
+  /** 进度状态最大存活时间（10分钟，兜底清理） */
+  const progressMaxAge = 10 * 60 * 1000
+  const progressSweep = setInterval(() => {
+    const now = Date.now()
+    for (const [taskId, pState] of progressState) {
+      if (now - pState.createdAt >= progressMaxAge) {
+        if (pState.progressMsgId && pState.progressMsgId !== -1) {
+          bot.api.deleteMessage(pState.chatId, pState.progressMsgId).catch(() => {})
+        }
+        progressState.delete(taskId)
+      }
+    }
+  }, 60_000)
+  progressSweep.unref()
 
   // 初始化进度追踪
   function initProgress(taskId: string, chatId: number, replyToMsgId: number): void {
-    progressState.set(taskId, { chatId, replyToMsgId, lastUpdateAt: 0 })
+    progressState.set(taskId, { chatId, replyToMsgId, lastUpdateAt: 0, createdAt: Date.now() })
   }
 
   // 清理进度消息
@@ -471,9 +486,14 @@ export function createBot(
       const num = parseInt(arg, 10)
       if (!isNaN(num) && num > 0) {
         limit = Math.min(num, 20)
-      } else {
+      } else if (/^\w+$/.test(arg)) {
         agentName = arg
       }
+    }
+
+    if (agentName && !registry.getCredential(agentName)) {
+      await ctx.reply(`未找到 Agent: ${agentName}`)
+      return
     }
 
     const tasks = await taskQueue.getRecentTasks({ agentName, limit })
@@ -588,8 +608,24 @@ export function createBot(
           return
         }
 
-        // 直接使用原始用户消息，不再拼接历史上下文
-        // Claude 原生会话恢复会保持完整上下文窗口
+        // 所有权检查：与 handleNewTask 保持一致
+        const senderId = ctx.from?.id
+        const ownerTelegramId = registry.getTelegramUserId(parentTask.to)
+
+        if (ownerTelegramId && senderId !== ownerTelegramId) {
+          // 非主人：走审批流程而不是自动批准
+          await handleNewTask({
+            agentName: parentTask.to,
+            content: text,
+            chatId,
+            messageId,
+            from,
+            senderId,
+          })
+          return
+        }
+
+        // 主人继续对话：自动批准
         const convTasks = taskQueue.getTasksByConversation(parentTask.conversationId)
         const turnCount = convTasks.length + 1
 
@@ -744,14 +780,10 @@ export function createBot(
         return
       }
 
+      const task = taskQueue.getTask(taskId)
+      const conversationId = task?.conversationId
       const pageInfo = `\n\n📄 第 ${pageIndex + 1}/${totalPages} 页`
-      const keyboard = new InlineKeyboard()
-      if (pageIndex > 0) {
-        keyboard.text("◀ 上一页", `page:${taskId}:${pageIndex - 1}`)
-      }
-      if (pageIndex < totalPages - 1) {
-        keyboard.text("▶ 下一页", `page:${taskId}:${pageIndex + 1}`)
-      }
+      const keyboard = buildResultKeyboard(taskId, pageIndex, totalPages, conversationId)
 
       try {
         await ctx.editMessageText(pageContent.text + pageInfo, {
@@ -989,10 +1021,8 @@ export function createBot(
     }
   }
 
-  // 任务结果回调（含进度清理）
+  // 任务结果回调（先发结果，再清进度）
   wsServer.onTaskResult(async (taskId, result, status, chatId, messageId) => {
-    await cleanupProgress(taskId)
-
     const task = taskQueue.getTask(taskId)
     const agentName = task?.to ?? "unknown"
 
@@ -1013,6 +1043,9 @@ export function createBot(
         }
       }
     } catch { /* ignore */ }
+
+    // 结果发送完毕后再清理进度消息
+    await cleanupProgress(taskId)
   })
 
   // 任务取消回调（含进度清理）

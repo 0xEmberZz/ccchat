@@ -29,6 +29,13 @@ export type AgentStatusCallback = (agentName: string) => void
 
 export type TaskCancelledCallback = (taskId: string, agentName: string) => void
 
+export type TaskProgressCallback = (
+  taskId: string,
+  status: string,
+  detail: string | undefined,
+  elapsedMs: number,
+) => void
+
 // WsServer 对外 API
 export interface WsServer {
   readonly sendToAgent: (agentName: string, msg: HubToAgentMessage) => boolean
@@ -37,6 +44,7 @@ export interface WsServer {
   readonly onTaskCancelled: (callback: TaskCancelledCallback) => void
   readonly onAgentOnline: (callback: AgentStatusCallback) => void
   readonly onAgentOffline: (callback: AgentStatusCallback) => void
+  readonly onTaskProgress: (callback: TaskProgressCallback) => void
   readonly close: () => void
 }
 
@@ -50,6 +58,7 @@ export function createWsServer(
   const wss = new WebSocketServer({ server: httpServer })
   let taskResultCallback: TaskResultCallback | undefined
   let taskCancelledCallback: TaskCancelledCallback | undefined
+  let taskProgressCallback: TaskProgressCallback | undefined
   let agentOnlineCallback: AgentStatusCallback | undefined
   let agentOfflineCallback: AgentStatusCallback | undefined
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
@@ -106,6 +115,7 @@ export function createWsServer(
       if (task.status !== "approved") {
         continue
       }
+      const taskAttachments = taskQueue.getAttachments(task.taskId)
       const msg: TaskMessage = {
         type: "task",
         taskId: task.taskId,
@@ -113,11 +123,15 @@ export function createWsServer(
         content: task.content,
         chatId: task.chatId,
         messageId: task.messageId,
+        ...(task.conversationId ? { conversationId: task.conversationId } : {}),
+        ...(task.parentTaskId ? { parentTaskId: task.parentTaskId } : {}),
+        ...(taskAttachments ? { attachments: taskAttachments } : {}),
       }
       const sent = sendToAgent(agentName, msg)
       if (sent) {
         taskQueue.removePending(agentName, task.taskId)
         taskQueue.updateStatus(task.taskId, "running")
+        taskQueue.clearAttachments(task.taskId)
       }
     }
   }
@@ -195,6 +209,12 @@ export function createWsServer(
           })
         }
         return
+      case "task_progress":
+        if (agentName && "taskId" in msg) {
+          const progressMsg = msg as { taskId: string; status: string; detail?: string; elapsedMs: number }
+          taskProgressCallback?.(progressMsg.taskId, progressMsg.status, progressMsg.detail, progressMsg.elapsedMs)
+        }
+        return
       case "send_message":
         // Agent 间消息传递（暂不处理，预留扩展）
         return
@@ -262,6 +282,9 @@ export function createWsServer(
     },
     onAgentOffline: (callback: AgentStatusCallback) => {
       agentOfflineCallback = callback
+    },
+    onTaskProgress: (callback: TaskProgressCallback) => {
+      taskProgressCallback = callback
     },
     close: () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer)

@@ -97,6 +97,7 @@ async function main(): Promise<void> {
     hubConfig.hubUrl,
     agentStatusStore,
     hubConfig.telegramChatId,
+    pool,
   )
   botRef = bot
 

@@ -11,6 +11,10 @@ export interface TaskRepo {
     readonly tasks: ReadonlyArray<TaskInfo>
     readonly pending: ReadonlyMap<string, ReadonlyArray<string>>
   }>
+  readonly findRecent: (options?: {
+    readonly agentName?: string
+    readonly limit?: number
+  }) => Promise<ReadonlyArray<TaskInfo>>
 }
 
 function rowToTask(row: Record<string, unknown>): TaskInfo {
@@ -122,6 +126,25 @@ export function createTaskRepo(pool: DbPool): TaskRepo {
       }
 
       return { tasks, pending }
+    },
+
+    async findRecent(options?: {
+      readonly agentName?: string
+      readonly limit?: number
+    }): Promise<ReadonlyArray<TaskInfo>> {
+      const limit = Math.min(options?.limit ?? 10, 20)
+      if (options?.agentName) {
+        const { rows } = await pool.query(
+          "SELECT * FROM tasks WHERE to_agent = $1 ORDER BY created_at DESC LIMIT $2",
+          [options.agentName, limit],
+        )
+        return rows.map(rowToTask)
+      }
+      const { rows } = await pool.query(
+        "SELECT * FROM tasks ORDER BY created_at DESC LIMIT $1",
+        [limit],
+      )
+      return rows.map(rowToTask)
     },
   }
 }

@@ -35,6 +35,16 @@ const MIGRATIONS = [
       );
     `,
   },
+  {
+    name: "002_status_panels",
+    sql: `
+      CREATE TABLE IF NOT EXISTS status_panels (
+        chat_id BIGINT PRIMARY KEY,
+        message_id BIGINT NOT NULL,
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+      );
+    `,
+  },
 ]
 
 export async function runMigrations(pool: DbPool): Promise<void> {

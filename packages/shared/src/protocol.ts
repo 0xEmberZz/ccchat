@@ -48,6 +48,14 @@ export interface StatusReportMessage {
   readonly idleSince?: string
 }
 
+export interface TaskProgressMessage {
+  readonly type: "task_progress"
+  readonly taskId: string
+  readonly status: string
+  readonly detail?: string
+  readonly elapsedMs: number
+}
+
 export type AgentToHubMessage =
   | RegisterMessage
   | PongMessage
@@ -57,6 +65,7 @@ export type AgentToHubMessage =
   | TaskStatusRequest
   | TaskCancelledMessage
   | StatusReportMessage
+  | TaskProgressMessage
 
 // ─── Hub -> Agent Messages ───
 
@@ -77,6 +86,9 @@ export interface TaskMessage {
   readonly content: string
   readonly chatId: number
   readonly messageId: number
+  readonly conversationId?: string
+  readonly parentTaskId?: string
+  readonly attachments?: ReadonlyArray<import("./types.js").TaskAttachment>
 }
 
 export interface ListAgentsResponse {

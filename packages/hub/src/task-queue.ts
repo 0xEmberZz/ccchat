@@ -1,4 +1,4 @@
-import type { TaskInfo } from "@ccchat/shared"
+import type { TaskInfo, TaskAttachment } from "@ccchat/shared"
 import { randomUUID } from "node:crypto"
 import type { TaskRepo } from "./db/index.js"
 
@@ -22,6 +22,14 @@ interface CreateTaskParams {
   readonly parentTaskId?: string
 }
 
+// 活跃对话信息
+export interface ActiveConversation {
+  readonly conversationId: string
+  readonly agentName: string
+  readonly turnCount: number
+  readonly lastActiveAt: string
+}
+
 // 任务队列对外 API
 export interface TaskQueue {
   readonly createTask: (params: CreateTaskParams) => TaskInfo
@@ -38,6 +46,19 @@ export interface TaskQueue {
   readonly findTaskByResultMessageId: (messageId: number) => TaskInfo | undefined
   readonly setResultMessageId: (taskId: string, messageId: number) => void
   readonly updateChatInfo: (taskId: string, chatId: number, messageId: number) => void
+  // 对话生命周期
+  readonly closeConversation: (conversationId: string) => void
+  readonly isConversationClosed: (conversationId: string) => boolean
+  readonly getActiveConversations: () => ReadonlyArray<ActiveConversation>
+  // 历史查询
+  readonly getRecentTasks: (options?: {
+    readonly agentName?: string
+    readonly limit?: number
+  }) => Promise<ReadonlyArray<TaskInfo>>
+  // 附件
+  readonly setAttachments: (taskId: string, attachments: ReadonlyArray<TaskAttachment>) => void
+  readonly getAttachments: (taskId: string) => ReadonlyArray<TaskAttachment> | undefined
+  readonly clearAttachments: (taskId: string) => void
   // 持久化
   readonly loadFromRepo: () => Promise<void>
 }
@@ -49,6 +70,8 @@ export interface TaskQueueOptions {
 // 创建任务队列实例
 export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
   const repo = options?.taskRepo
+  const closedConversations = new Set<string>()
+  const attachments = new Map<string, ReadonlyArray<TaskAttachment>>()
 
   let state: TaskQueueState = {
     tasks: new Map(),
@@ -171,6 +194,7 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     if (!existing) return undefined
 
     const isCompleted = status === "completed" || status === "failed" || status === "cancelled"
+    const isTerminal = isCompleted || status === "rejected"
     const updated: TaskInfo = {
       ...existing,
       status,
@@ -181,6 +205,9 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     newTasks.set(taskId, updated)
     state = { ...state, tasks: newTasks }
     persistTaskUpdate(updated)
+    if (isTerminal) {
+      attachments.delete(taskId)
+    }
     return updated
   }
 
@@ -247,6 +274,73 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     persistTaskUpdate(updated)
   }
 
+  function closeConversation(conversationId: string): void {
+    closedConversations.add(conversationId)
+  }
+
+  function isConversationClosed(conversationId: string): boolean {
+    return closedConversations.has(conversationId)
+  }
+
+  function getActiveConversations(): ReadonlyArray<ActiveConversation> {
+    const convMap = new Map<string, { agentName: string; turnCount: number; lastActiveAt: string }>()
+
+    for (const [convId, taskIds] of state.tasksByConversation) {
+      if (closedConversations.has(convId)) continue
+
+      const tasks = taskIds
+        .map((id) => state.tasks.get(id))
+        .filter((t): t is TaskInfo => t !== undefined)
+
+      if (tasks.length === 0) continue
+
+      const lastTask = tasks.reduce((latest, t) =>
+        new Date(t.createdAt).getTime() > new Date(latest.createdAt).getTime() ? t : latest
+      )
+
+      convMap.set(convId, {
+        agentName: lastTask.to,
+        turnCount: tasks.length,
+        lastActiveAt: lastTask.createdAt,
+      })
+    }
+
+    return Array.from(convMap.entries())
+      .map(([conversationId, info]) => ({ conversationId, ...info }))
+      .sort((a, b) => new Date(b.lastActiveAt).getTime() - new Date(a.lastActiveAt).getTime())
+  }
+
+  async function getRecentTasks(options?: {
+    readonly agentName?: string
+    readonly limit?: number
+  }): Promise<ReadonlyArray<TaskInfo>> {
+    const limit = Math.min(options?.limit ?? 10, 20)
+    // If we have a repo, query from DB for full history
+    if (repo) {
+      return repo.findRecent(options)
+    }
+    // Otherwise, return from in-memory state
+    const allTasks = Array.from(state.tasks.values())
+    const filtered = options?.agentName
+      ? allTasks.filter((t) => t.to === options.agentName)
+      : allTasks
+    return filtered
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())
+      .slice(0, limit)
+  }
+
+  function setAttachments(taskId: string, atts: ReadonlyArray<TaskAttachment>): void {
+    attachments.set(taskId, atts)
+  }
+
+  function getAttachments(taskId: string): ReadonlyArray<TaskAttachment> | undefined {
+    return attachments.get(taskId)
+  }
+
+  function clearAttachments(taskId: string): void {
+    attachments.delete(taskId)
+  }
+
   return {
     createTask: (params: CreateTaskParams) => {
       const { task, persisted } = createTask(params)
@@ -261,6 +355,13 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     findTaskByResultMessageId,
     setResultMessageId,
     updateChatInfo,
+    closeConversation,
+    isConversationClosed,
+    getActiveConversations,
+    getRecentTasks,
+    setAttachments,
+    getAttachments,
+    clearAttachments,
     loadFromRepo,
   }
 }

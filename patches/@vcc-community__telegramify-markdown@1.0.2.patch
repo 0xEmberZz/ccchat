@@ -1,0 +1,12 @@
+diff --git a/package.json b/package.json
+index 402b7d8138bf2925b5c382be06d72f1dba85eb4b..8f5683caee791bbfd4e1b97418cb48154fc49614 100644
+--- a/package.json
++++ b/package.json
+@@ -4,7 +4,6 @@
+   "description": "A lightweight utility to convert Markdown to a Telegram-friendly subset of HTML.",
+   "main": "dist/index.js",
+   "types": "dist/index.d.ts",
+-  "type": "module",
+   "files": [
+     "dist",
+     "README.md",

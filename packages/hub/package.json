@@ -14,6 +14,7 @@
   },
   "dependencies": {
     "@ccchat/shared": "workspace:*",
+    "@vcc-community/telegramify-markdown": "^1.0.2",
     "dotenv": "^16.4.0",
     "grammy": "^1.35.0",
     "pg": "^8.18.0",

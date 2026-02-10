@@ -4,6 +4,11 @@ settings:
   autoInstallPeers: true
   excludeLinksFromLockfile: false
 
+patchedDependencies:
+  '@vcc-community/telegramify-markdown@1.0.2':
+    hash: 132b7bc847c8358d00c8e10829d512195510b3adca6f91223acb3a5b0d2236f9
+    path: patches/@vcc-community__telegramify-markdown@1.0.2.patch
+
 importers:
 
   .: {}
@@ -32,6 +37,9 @@ importers:
       '@ccchat/shared':
         specifier: workspace:*
         version: link:../shared
+      '@vcc-community/telegramify-markdown':
+        specifier: ^1.0.2
+        version: 1.0.2(patch_hash=132b7bc847c8358d00c8e10829d512195510b3adca6f91223acb3a5b0d2236f9)
       dotenv:
         specifier: ^16.4.0
         version: 16.6.1
@@ -266,6 +274,9 @@ packages:
       '@cfworker/json-schema':
         optional: true
 
+  '@types/marked@5.0.2':
+    resolution: {integrity: sha512-OucS4KMHhFzhz27KxmWg7J+kIYqyqoW5kdIEI319hqARQQUTqhao3M/F+uFnDXD0Rg72iDDZxZNxq5gvctmLlg==}
+
   '@types/node@25.2.2':
     resolution: {integrity: sha512-BkmoP5/FhRYek5izySdkOneRyXYN35I860MFAGupTdebyE66uZaR+bXLHq8k4DirE5DwQi3NuhvRU1jqTVwUrQ==}
 
@@ -274,6 +285,9 @@ packages:
 
   '@types/ws@8.18.1':
     resolution: {integrity: sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg==}
+
+  '@vcc-community/telegramify-markdown@1.0.2':
+    resolution: {integrity: sha512-TLe1axl04o8zFdLLNjquM0SvSi18Yz46n5j/Rqbf00Av4TbxrffVi3WyJE9ruz77bous6Vp62KSGafOakTGDAw==}
 
   abort-controller@3.0.0:
     resolution: {integrity: sha512-h8lQ8tacZYnR3vNQTgibj+tODHI5/+l06Au2Pcriv/Gmet0eaj4TwWH41sO9wnHDiQsEj19q0drzdWdeAHtweg==}
@@ -498,6 +512,11 @@ packages:
 
   json-schema-typed@8.0.2:
     resolution: {integrity: sha512-fQhoXdcvc3V28x7C7BMs4P5+kNlgUURe2jmUT1T//oBRMDrqy1QPelJimwZGo7Hg9VPV3EQV5Bnq4hbFy2vetA==}
+
+  marked@15.0.12:
+    resolution: {integrity: sha512-8dD6FusOQSrpv9Z1rdNMdlSgQOIP880DHqnohobOmYLElGEqAL/JvxvuxZO16r4HtjTlfPRDC1hbvxC9dPN2nA==}
+    engines: {node: '>= 18'}
+    hasBin: true
 
   math-intrinsics@1.1.0:
     resolution: {integrity: sha512-/IXtbwEk5HTPyEwyKX6hGkYXxM9nbj64B+ilVJnC/R6B0pH5G4V3b0pVbL7DBj4tkhBAppbQUlf6F6Xl9LHu1g==}
@@ -866,6 +885,8 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
+  '@types/marked@5.0.2': {}
+
   '@types/node@25.2.2':
     dependencies:
       undici-types: 7.16.0
@@ -879,6 +900,11 @@ snapshots:
   '@types/ws@8.18.1':
     dependencies:
       '@types/node': 25.2.2
+
+  '@vcc-community/telegramify-markdown@1.0.2(patch_hash=132b7bc847c8358d00c8e10829d512195510b3adca6f91223acb3a5b0d2236f9)':
+    dependencies:
+      '@types/marked': 5.0.2
+      marked: 15.0.12
 
   abort-controller@3.0.0:
     dependencies:
@@ -1143,6 +1169,8 @@ snapshots:
   json-schema-traverse@1.0.0: {}
 
   json-schema-typed@8.0.2: {}
+
+  marked@15.0.12: {}
 
   math-intrinsics@1.1.0: {}
 

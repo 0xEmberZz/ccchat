@@ -1,6 +1,7 @@
 export type {
   AgentInfo,
   TaskInfo,
+  TaskAttachment,
   DaemonConfig,
   HubConfig,
 } from "./types.js"
@@ -14,6 +15,7 @@ export type {
   TaskStatusRequest,
   TaskCancelledMessage,
   StatusReportMessage,
+  TaskProgressMessage,
   AgentToHubMessage,
   RegisterAckMessage,
   PingMessage,

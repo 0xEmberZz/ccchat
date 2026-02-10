@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 
-import type { HubToAgentMessage, TaskMessage, DaemonConfig } from "@ccchat/shared"
+import { mkdir, writeFile } from "node:fs/promises"
+import { join, basename } from "node:path"
+import type { HubToAgentMessage, TaskMessage, DaemonConfig, AgentToHubMessage } from "@ccchat/shared"
 import { loadConfig, initConfig, getConfigPath } from "./config.js"
 import { createWsClient } from "./ws-client.js"
 import { createExecutor, type Executor } from "./executor.js"
@@ -9,12 +11,42 @@ import { createExecutor, type Executor } from "./executor.js"
 async function handleTask(
   task: TaskMessage,
   config: DaemonConfig,
-  send: (msg: import("@ccchat/shared").AgentToHubMessage) => void,
+  send: (msg: AgentToHubMessage) => void,
   executor: Executor,
 ): Promise<void> {
   process.stdout.write(`收到任务 [${task.taskId}] 来自 ${task.from}: ${task.content.slice(0, 80)}\n`)
 
-  const result = await executor.execute(task.taskId, task.content)
+  const startTime = Date.now()
+
+  // 保存附件到本地
+  let content = task.content
+  if (task.attachments && task.attachments.length > 0) {
+    const attachDir = join(config.workDir, ".ccchat-attachments", task.taskId.slice(0, 8))
+    await mkdir(attachDir, { recursive: true })
+    const paths: string[] = []
+    for (const att of task.attachments) {
+      const safeName = basename(att.filename).replace(/[^\w.\-]/g, "_") || "attachment"
+      const filePath = join(attachDir, safeName)
+      await writeFile(filePath, Buffer.from(att.data, "base64"))
+      paths.push(filePath)
+      process.stdout.write(`附件已保存: ${filePath} (${att.size} bytes)\n`)
+    }
+    content = `${content}\n\n[附件文件]\n${paths.map((p) => `- ${p}`).join("\n")}`
+  }
+
+  const result = await executor.execute(task.taskId, content, {
+    conversationId: task.conversationId,
+    parentTaskId: task.parentTaskId,
+    onProgress: (status, detail) => {
+      send({
+        type: "task_progress",
+        taskId: task.taskId,
+        status,
+        detail,
+        elapsedMs: Date.now() - startTime,
+      })
+    },
+  })
 
   send({
     type: "task_result",
@@ -29,7 +61,7 @@ async function handleTask(
 /** 处理取消任务消息 */
 function handleCancelTask(
   taskId: string,
-  send: (msg: import("@ccchat/shared").AgentToHubMessage) => void,
+  send: (msg: AgentToHubMessage) => void,
   executor: Executor,
 ): void {
   process.stdout.write(`收到取消请求: ${taskId}\n`)

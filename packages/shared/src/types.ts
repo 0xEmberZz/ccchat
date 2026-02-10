@@ -22,6 +22,13 @@ export interface TaskInfo {
   readonly resultMessageId?: number
 }
 
+export interface TaskAttachment {
+  readonly filename: string
+  readonly mimeType: string
+  readonly data: string  // base64
+  readonly size: number
+}
+
 export interface DaemonConfig {
   readonly hubUrl: string
   readonly agentName: string

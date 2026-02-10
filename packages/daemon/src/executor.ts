@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process"
+import { createInterface } from "node:readline"
 import type { DaemonConfig } from "@ccchat/shared"
 
 interface ExecutionResult {
@@ -6,8 +7,14 @@ interface ExecutionResult {
   readonly status: "success" | "error"
 }
 
+export interface ExecuteOptions {
+  readonly conversationId?: string
+  readonly parentTaskId?: string
+  readonly onProgress?: (status: string, detail?: string) => void
+}
+
 export interface Executor {
-  readonly execute: (taskId: string, taskContent: string) => Promise<ExecutionResult>
+  readonly execute: (taskId: string, taskContent: string, options?: ExecuteOptions) => Promise<ExecutionResult>
   readonly cancel: (taskId: string) => boolean
   readonly getRunningCount: () => number
   readonly getCurrentTaskId: () => string | undefined
@@ -21,17 +28,47 @@ function extractResult(rawOutput: string): string {
   return trimmed.slice(-4000)
 }
 
+/** 从 assistant message content blocks 提取可读状态 */
+function extractStreamStatus(event: Record<string, unknown>): { status: string; detail?: string } | undefined {
+  if (event.type !== "assistant") return undefined
+  const message = event.message as Record<string, unknown> | undefined
+  if (!message) return undefined
+  const content = message.content as ReadonlyArray<Record<string, unknown>> | undefined
+  if (!content || content.length === 0) return { status: "thinking" }
+
+  for (const block of content) {
+    if (block.type === "tool_use") {
+      return { status: "tool_use", detail: block.name as string }
+    }
+  }
+  for (const block of content) {
+    if (block.type === "text") {
+      return { status: "responding" }
+    }
+  }
+  return { status: "thinking" }
+}
+
 /** 执行 Claude Code 命令 */
 function runClaude(
   taskContent: string,
   config: DaemonConfig,
+  options?: ExecuteOptions,
 ): { readonly child: ChildProcess; readonly result: Promise<ExecutionResult> } {
   const timeout = config.taskTimeout ?? 300_000
-  // 如果有 systemPrompt，拼接到任务内容前面
   const prompt = config.systemPrompt
     ? `[系统角色] ${config.systemPrompt}\n\n[任务] ${taskContent}`
     : taskContent
-  const args = ["-p", prompt, "--output-format", "text"]
+  const args = ["-p", prompt, "--output-format", "stream-json", "--verbose"]
+
+  // 多轮对话：使用 Claude 原生会话恢复
+  if (options?.conversationId) {
+    if (options.parentTaskId) {
+      args.push("--resume", options.conversationId)
+    } else {
+      args.push("--session-id", options.conversationId)
+    }
+  }
 
   const child = spawn("claude", args, {
     cwd: config.workDir,
@@ -40,12 +77,40 @@ function runClaude(
   })
 
   const result = new Promise<ExecutionResult>((resolve) => {
-    let stdout = ""
+    let resultText = ""
+    let fallbackText = ""
     let stderr = ""
 
-    child.stdout?.on("data", (chunk: Buffer) => {
-      stdout += chunk.toString()
-    })
+    // 逐行解析 NDJSON stream
+    if (child.stdout) {
+      const rl = createInterface({ input: child.stdout })
+      rl.on("line", (line) => {
+        try {
+          const event = JSON.parse(line) as Record<string, unknown>
+          if (event.type === "result") {
+            resultText = (event.result as string) ?? ""
+          } else if (event.type === "assistant") {
+            // 收集 assistant text 作为 fallback
+            const message = event.message as Record<string, unknown> | undefined
+            const content = message?.content as ReadonlyArray<Record<string, unknown>> | undefined
+            if (content) {
+              for (const block of content) {
+                if (block.type === "text" && typeof block.text === "string") {
+                  fallbackText = block.text
+                }
+              }
+            }
+            // 通知进度
+            const statusInfo = extractStreamStatus(event)
+            if (statusInfo && options?.onProgress) {
+              options.onProgress(statusInfo.status, statusInfo.detail)
+            }
+          }
+        } catch {
+          // 非 JSON 行忽略
+        }
+      })
+    }
 
     child.stderr?.on("data", (chunk: Buffer) => {
       stderr += chunk.toString()
@@ -63,20 +128,20 @@ function runClaude(
     child.on("close", (code, signal) => {
       clearTimeout(timer)
       if (signal === "SIGTERM" || signal === "SIGKILL") {
-        // 可能是取消或超时
-        const existing = stdout.trim()
+        const existing = resultText || fallbackText
         resolve({
           output: existing ? `${extractResult(existing)}\n\n(任务被取消)` : "任务已取消",
           status: "error",
         })
       } else if (code === 0) {
+        const output = resultText || fallbackText
         resolve({
-          output: extractResult(stdout) || "(无输出)",
+          output: extractResult(output) || "(无输出)",
           status: "success",
         })
       } else {
         resolve({
-          output: extractResult(stderr || stdout) || `进程退出码: ${code}`,
+          output: extractResult(stderr || resultText || fallbackText) || `进程退出码: ${code}`,
           status: "error",
         })
       }
@@ -100,7 +165,7 @@ export function createExecutor(config: DaemonConfig): Executor {
   const runningTasks = new Map<string, ChildProcess>()
 
   return {
-    async execute(taskId: string, taskContent: string): Promise<ExecutionResult> {
+    async execute(taskId: string, taskContent: string, options?: ExecuteOptions): Promise<ExecutionResult> {
       if (runningTasks.size >= maxConcurrent) {
         return {
           output: `并发上限 (${maxConcurrent})，请稍后重试`,
@@ -108,7 +173,12 @@ export function createExecutor(config: DaemonConfig): Executor {
         }
       }
 
-      const { child, result } = runClaude(taskContent, config)
+      if (options?.conversationId) {
+        const mode = options.parentTaskId ? "--resume" : "--session-id"
+        process.stdout.write(`会话模式: ${mode} ${options.conversationId}\n`)
+      }
+
+      const { child, result } = runClaude(taskContent, config, options)
       runningTasks.set(taskId, child)
 
       try {

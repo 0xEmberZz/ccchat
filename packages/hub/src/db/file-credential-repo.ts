@@ -13,7 +13,7 @@ interface FileData {
 function ensureDir(filePath: string): void {
   const dir = path.dirname(filePath)
   if (!fs.existsSync(dir)) {
-    fs.mkdirSync(dir, { recursive: true })
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 })
   }
 }
 
@@ -31,7 +31,7 @@ function readFile(filePath: string): ReadonlyArray<CredentialRow> {
 function writeFile(filePath: string, credentials: ReadonlyArray<CredentialRow>): void {
   ensureDir(filePath)
   const data: FileData = { credentials }
-  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), "utf-8")
+  fs.writeFileSync(filePath, JSON.stringify(data, null, 2), { encoding: "utf-8", mode: 0o600 })
 }
 
 export function createFileCredentialRepo(dataDir?: string): CredentialRepo {

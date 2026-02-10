@@ -31,9 +31,9 @@ export function loadConfig(): DaemonConfig | null {
 /** 保存配置到文件 */
 export function saveConfig(config: DaemonConfig): void {
   if (!fs.existsSync(CONFIG_DIR)) {
-    fs.mkdirSync(CONFIG_DIR, { recursive: true })
+    fs.mkdirSync(CONFIG_DIR, { recursive: true, mode: 0o700 })
   }
-  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8")
+  fs.writeFileSync(CONFIG_FILE, JSON.stringify(config, null, 2), { encoding: "utf-8", mode: 0o600 })
 }
 
 /** 交互式问答工具 */

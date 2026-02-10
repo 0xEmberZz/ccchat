@@ -12,7 +12,6 @@ import { createTaskQueue } from "../src/task-queue.js"
 import { createWsServer } from "../src/ws-server.js"
 import { createAgentStatusStore } from "../src/agent-status-store.js"
 import { createApiHandler } from "../src/api.js"
-import { buildConversationContext } from "../src/conversation.js"
 import { formatResult, formatResultPlain } from "../src/formatter.js"
 import { createPaginator } from "../src/paginator.js"
 import {
@@ -340,7 +339,7 @@ async function main(): Promise<void> {
     }
 
     // ═══════════════════════════════════════
-    section("8. 多轮对话上下文")
+    section("8. 多轮对话索引")
     // ═══════════════════════════════════════
     {
       // 第一轮
@@ -358,20 +357,15 @@ async function main(): Promise<void> {
       const found = taskQueue.findTaskByResultMessageId(501)
       assert(found?.taskId === task1.taskId, "findTaskByResultMessageId 查找成功")
 
-      // 第二轮
+      // 对话索引
       const convTasks = taskQueue.getTasksByConversation(task1.conversationId!)
       assert(convTasks.length >= 1, `对话中有 ${convTasks.length} 个任务`)
 
-      const context = buildConversationContext(convTasks, "和 JavaScript 有什么区别?")
-      assert(context.includes("[用户]"), "上下文包含 [用户] 标记")
-      assert(context.includes("[助手]"), "上下文包含 [助手] 标记")
-      assert(context.includes("和 JavaScript 有什么区别"), "上下文包含新消息")
-
-      // 创建续轮任务
+      // 创建续轮任务（多轮对话现使用 Claude 原生 --resume 会话恢复）
       const task2 = taskQueue.createTask({
         from: "user1",
         to: "test-agent",
-        content: context,
+        content: "和 JavaScript 有什么区别?",
         chatId: 100,
         messageId: 502,
         conversationId: task1.conversationId,

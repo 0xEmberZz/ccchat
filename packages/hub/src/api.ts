@@ -59,8 +59,12 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
     const path = url.pathname
     const method = req.method ?? "GET"
 
-    // CORS headers
-    res.setHeader("Access-Control-Allow-Origin", "*")
+    // CORS headers（仅允许同源请求，API 通过 Bearer token 认证而非 cookie）
+    const origin = req.headers.origin
+    const allowedOrigin = process.env.CORS_ORIGIN
+    if (allowedOrigin && origin === allowedOrigin) {
+      res.setHeader("Access-Control-Allow-Origin", allowedOrigin)
+    }
     res.setHeader("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
     res.setHeader("Access-Control-Allow-Headers", "Content-Type, Authorization")
 
@@ -99,6 +103,9 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       sendJson(res, 200, { status: "ok" })
       return
     }
+
+    // 未匹配的路由返回 404
+    sendJson(res, 404, { error: "Not Found" })
   }
 }
 

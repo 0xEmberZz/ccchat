@@ -56,7 +56,8 @@ export function createWsServer(
   taskQueue: TaskQueue,
   agentStatusStore?: AgentStatusStore,
 ): WsServer {
-  const wss = new WebSocketServer({ server: httpServer, maxPayload: 1_048_576 })
+  // 8MB maxPayload: 5MB Telegram 文件 → ~6.67MB base64 + 消息开销
+  const wss = new WebSocketServer({ server: httpServer, maxPayload: 8_388_608 })
   // 速率限制：连接 per IP (20/60s)，消息 per agent (100/10s)
   const connRateLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 20 })
   const msgRateLimiter = createRateLimiter({ windowMs: 10_000, maxRequests: 100 })
@@ -149,6 +150,8 @@ export function createWsServer(
   ): void {
     const task = taskQueue.getTask(taskId)
     if (!task) return
+    // 任务归属检查：只有任务的目标 agent 才能提交结果
+    if (task.to !== agentName) return
     const finalStatus = status === "success" ? "completed" : "failed"
     taskQueue.updateStatus(taskId, finalStatus, result)
     agentStatusStore?.incrementCompleted(agentName)
@@ -199,6 +202,9 @@ export function createWsServer(
         return
       case "task_cancelled":
         if (agentName) {
+          // 任务归属检查：只有任务的目标 agent 才能取消
+          const cancelTask = taskQueue.getTask(msg.taskId)
+          if (!cancelTask || cancelTask.to !== agentName) return
           taskQueue.updateStatus(msg.taskId, "cancelled")
           agentStatusStore?.incrementCompleted(agentName)
           taskCancelledCallback?.(msg.taskId, agentName)
@@ -243,12 +249,8 @@ export function createWsServer(
         return // 超限，静默丢弃
       }
 
-      let msg: AgentToHubMessage
-      try {
-        msg = parseAgentMessage(data.toString())
-      } catch {
-        return // 忽略格式错误的消息
-      }
+      const msg = parseAgentMessage(data.toString())
+      if (!msg) return // 无效消息（schema 校验失败）
       try {
         routeMessage(ws, msg)
       } catch (err) {

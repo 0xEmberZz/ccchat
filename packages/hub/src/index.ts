@@ -44,6 +44,7 @@ function loadConfig(): { readonly port: number; readonly telegramBotToken: strin
 // 全局错误捕获
 process.on("uncaughtException", (err) => {
   process.stderr.write(`[FATAL] uncaughtException: ${err.stack ?? err.message}\n`)
+  process.exit(1)
 })
 process.on("unhandledRejection", (reason) => {
   process.stderr.write(`[FATAL] unhandledRejection: ${reason}\n`)

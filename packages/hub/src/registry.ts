@@ -62,6 +62,8 @@ export interface RegistryOptions {
 
 export function createRegistry(options?: RegistryOptions): Registry {
   const repo = options?.credentialRepo
+  // 反向查找：WebSocket → agentName（O(1) 查找，替代线性扫描）
+  const wsToAgent = new Map<WebSocket, string>()
 
   let state: RegistryState = {
     connections: new Map(),
@@ -206,10 +208,13 @@ export function createRegistry(options?: RegistryOptions): Registry {
     const newConnections = new Map(state.connections)
     newConnections.set(agentName, { ws, info })
     state = { ...state, connections: newConnections }
+    wsToAgent.set(ws, agentName)
     return info
   }
 
   function unregister(agentName: string): void {
+    const conn = state.connections.get(agentName)
+    if (conn) wsToAgent.delete(conn.ws)
     const newConnections = new Map(state.connections)
     newConnections.delete(agentName)
     state = { ...state, connections: newConnections }
@@ -220,10 +225,7 @@ export function createRegistry(options?: RegistryOptions): Registry {
   }
 
   function getAgentByWs(ws: WebSocket): string | undefined {
-    for (const [name, conn] of state.connections) {
-      if (conn.ws === ws) return name
-    }
-    return undefined
+    return wsToAgent.get(ws)
   }
 
   function listAgents(): ReadonlyArray<AgentInfo> {

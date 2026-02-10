@@ -85,6 +85,7 @@ export class HubClient {
     onRegisterFail: (err: Error) => void,
   ): void {
     const msg = parseHubMessage(raw)
+    if (!msg) return
 
     // 注册确认
     if (msg.type === "register_ack") {

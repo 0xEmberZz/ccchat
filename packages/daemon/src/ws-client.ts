@@ -41,6 +41,7 @@ function calcRetryDelay(retryCount: number): number {
 export interface WsClient {
   readonly connect: () => void
   readonly send: (msg: AgentToHubMessage) => void
+  readonly sendCritical: (msg: AgentToHubMessage) => void
   readonly close: () => void
   readonly isConnected: () => boolean
 }
@@ -51,6 +52,7 @@ export function createWsClient(
   callbacks: WsClientCallbacks,
 ): WsClient {
   let state = createInitialState()
+  let pendingResults: AgentToHubMessage[] = []
 
   /** 建立连接 */
   function connect(): void {
@@ -95,6 +97,7 @@ export function createWsClient(
   function handleRawMessage(data: WebSocket.RawData): void {
     try {
       const msg = parseHubMessage(data.toString())
+      if (!msg) return
       handleMessage(msg)
     } catch (err) {
       process.stderr.write(`消息解析失败: ${err}\n`)
@@ -115,6 +118,7 @@ export function createWsClient(
       if (msg.success) {
         state = { ...state, registered: true }
         process.stdout.write(`注册成功, Agent: ${config.agentName}\n`)
+        flushPendingResults()
       } else {
         process.stderr.write(`注册失败: ${msg.error ?? "未知错误"}\n`)
       }
@@ -134,16 +138,38 @@ export function createWsClient(
     setTimeout(connect, delay)
   }
 
-  /** 发送原始消息 */
+  /** 发送原始消息（断线时静默丢弃） */
   function sendRaw(msg: AgentToHubMessage): void {
     if (state.ws?.readyState === WebSocket.OPEN) {
       state.ws.send(serialize(msg))
     }
   }
 
+  /** 发送关键消息（断线时缓冲，重连后重发） */
+  function sendCritical(msg: AgentToHubMessage): void {
+    if (state.ws?.readyState === WebSocket.OPEN && state.registered) {
+      state.ws.send(serialize(msg))
+    } else {
+      pendingResults = [...pendingResults, msg]
+      process.stdout.write(`关键消息已缓冲 (待重连发送, 共 ${pendingResults.length} 条)\n`)
+    }
+  }
+
+  /** 重连注册成功后，重发缓冲的关键消息 */
+  function flushPendingResults(): void {
+    if (pendingResults.length === 0) return
+    const toSend = pendingResults
+    pendingResults = []
+    process.stdout.write(`重发 ${toSend.length} 条缓冲消息...\n`)
+    for (const msg of toSend) {
+      sendRaw(msg)
+    }
+  }
+
   return {
     connect,
     send: sendRaw,
+    sendCritical,
     close(): void {
       state = { ...state, stopped: true }
       state.ws?.close()

@@ -12,6 +12,7 @@ async function handleTask(
   task: TaskMessage,
   config: DaemonConfig,
   send: (msg: AgentToHubMessage) => void,
+  sendCritical: (msg: AgentToHubMessage) => void,
   executor: Executor,
 ): Promise<void> {
   process.stdout.write(`收到任务 [${task.taskId}] 来自 ${task.from}: ${task.content.slice(0, 80)}\n`)
@@ -48,7 +49,7 @@ async function handleTask(
     },
   })
 
-  send({
+  sendCritical({
     type: "task_result",
     taskId: task.taskId,
     result: result.output,
@@ -61,13 +62,13 @@ async function handleTask(
 /** 处理取消任务消息 */
 function handleCancelTask(
   taskId: string,
-  send: (msg: AgentToHubMessage) => void,
+  sendCritical: (msg: AgentToHubMessage) => void,
   executor: Executor,
 ): void {
   process.stdout.write(`收到取消请求: ${taskId}\n`)
   const cancelled = executor.cancel(taskId)
   if (cancelled) {
-    send({ type: "task_cancelled", taskId })
+    sendCritical({ type: "task_cancelled", taskId })
     process.stdout.write(`任务 [${taskId}] 已取消\n`)
   } else {
     process.stdout.write(`任务 [${taskId}] 未在运行，无法取消\n`)
@@ -94,7 +95,7 @@ async function startDaemon(): Promise<void> {
     onMessage(msg: HubToAgentMessage): void {
       if (msg.type === "task") {
         idleSince = undefined
-        handleTask(msg, config, client.send, executor)
+        handleTask(msg, config, client.send, client.sendCritical, executor)
           .then(() => {
             if (executor.getRunningCount() === 0) {
               idleSince = new Date().toISOString()
@@ -105,7 +106,7 @@ async function startDaemon(): Promise<void> {
             process.stderr.write(`Task execution failed: ${errMsg}\n`)
           })
       } else if (msg.type === "cancel_task") {
-        handleCancelTask(msg.taskId, client.send, executor)
+        handleCancelTask(msg.taskId, client.sendCritical, executor)
       }
     },
     onPing(): void {
@@ -119,15 +120,25 @@ async function startDaemon(): Promise<void> {
     },
   })
 
-  // 优雅退出
-  function shutdown(): void {
+  // 优雅退出：等待运行中的任务完成后再退出
+  let shuttingDown = false
+  async function shutdown(): Promise<void> {
+    if (shuttingDown) return
+    shuttingDown = true
     process.stdout.write("\n正在退出...\n")
+    await executor.shutdown(10_000)
     client.close()
     process.exit(0)
   }
 
-  process.on("SIGINT", shutdown)
-  process.on("SIGTERM", shutdown)
+  const onSignal = (): void => {
+    shutdown().catch((err: unknown) => {
+      process.stderr.write(`Shutdown error: ${err}\n`)
+      process.exit(1)
+    })
+  }
+  process.on("SIGINT", onSignal)
+  process.on("SIGTERM", onSignal)
 
   client.connect()
 }

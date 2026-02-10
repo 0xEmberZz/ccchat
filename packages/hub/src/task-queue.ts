@@ -77,8 +77,13 @@ export interface TaskQueueOptions {
 export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
   const repo = options?.taskRepo
   const conversationTimeout = options?.conversationTimeout ?? 30 * 60 * 1000
-  const closedConversations = new Set<string>()
+  const closedConversations = new Map<string, number>() // conversationId → closedAt timestamp
   const lastActivityByConversation = new Map<string, number>()
+  const attachmentCreatedAt = new Map<string, number>() // taskId → timestamp
+  /** 已关闭对话保留时间（10分钟后清理释放内存） */
+  const closedRetention = 10 * 60 * 1000
+  /** 附件最大保留时间（30分钟未 dispatch 则清理） */
+  const attachmentRetention = 30 * 60 * 1000
   const attachments = new Map<string, ReadonlyArray<TaskAttachment>>()
 
   let state: TaskQueueState = {
@@ -202,13 +207,12 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     const existing = state.tasks.get(taskId)
     if (!existing) return undefined
 
-    const isCompleted = status === "completed" || status === "failed" || status === "cancelled"
-    const isTerminal = isCompleted || status === "rejected"
+    const isTerminal = status === "completed" || status === "failed" || status === "cancelled" || status === "rejected"
     const updated: TaskInfo = {
       ...existing,
       status,
       ...(result !== undefined ? { result } : {}),
-      ...(isCompleted ? { completedAt: new Date().toISOString() } : {}),
+      ...(isTerminal ? { completedAt: new Date().toISOString() } : {}),
     }
     const newTasks = new Map(state.tasks)
     newTasks.set(taskId, updated)
@@ -216,8 +220,9 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     persistTaskUpdate(updated)
     if (isTerminal) {
       attachments.delete(taskId)
+      attachmentCreatedAt.delete(taskId)
     }
-    if (isCompleted && existing.conversationId) {
+    if (isTerminal && existing.conversationId) {
       lastActivityByConversation.set(existing.conversationId, Date.now())
     }
     return updated
@@ -287,7 +292,7 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
   }
 
   function closeConversation(conversationId: string): void {
-    closedConversations.add(conversationId)
+    closedConversations.set(conversationId, Date.now())
   }
 
   function isConversationClosed(conversationId: string): boolean {
@@ -343,6 +348,7 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
 
   function setAttachments(taskId: string, atts: ReadonlyArray<TaskAttachment>): void {
     attachments.set(taskId, atts)
+    attachmentCreatedAt.set(taskId, Date.now())
   }
 
   function getAttachments(taskId: string): ReadonlyArray<TaskAttachment> | undefined {
@@ -351,20 +357,66 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
 
   function clearAttachments(taskId: string): void {
     attachments.delete(taskId)
+    attachmentCreatedAt.delete(taskId)
   }
 
-  // 定时扫描超时对话（每分钟检查一次）
+  /** 终态任务内存保留时间（2 小时） */
+  const terminalTaskRetention = 2 * 60 * 60 * 1000
+
+  // 定时扫描：超时对话 + 内存清理（每分钟检查一次）
   const sweepInterval = setInterval(() => {
     const now = Date.now()
+
+    // 1. 清理过期的 closedConversations 条目（释放内存）
+    for (const [convId, closedAt] of closedConversations) {
+      if (now - closedAt >= closedRetention) {
+        closedConversations.delete(convId)
+        // 同时清理对话索引
+        const newConvIndex = new Map(state.tasksByConversation)
+        newConvIndex.delete(convId)
+        state = { ...state, tasksByConversation: newConvIndex }
+      }
+    }
+
+    // 2. 清理过期附件（长时间未 dispatch 的）
+    for (const [taskId, createdAt] of attachmentCreatedAt) {
+      if (now - createdAt >= attachmentRetention) {
+        attachments.delete(taskId)
+        attachmentCreatedAt.delete(taskId)
+      }
+    }
+
+    // 3. 清理终态任务（已完成/失败/取消超过 TTL 的从内存中移除）
+    const tasksToRemove: string[] = []
+    for (const [taskId, task] of state.tasks) {
+      const isTerminal = task.status === "completed" || task.status === "failed" || task.status === "cancelled" || task.status === "rejected"
+      if (!isTerminal || !task.completedAt) continue
+      if (now - new Date(task.completedAt).getTime() >= terminalTaskRetention) {
+        tasksToRemove.push(taskId)
+      }
+    }
+    if (tasksToRemove.length > 0) {
+      const newTasks = new Map(state.tasks)
+      const newResultMsgIndex = new Map(state.taskByResultMessageId)
+      for (const taskId of tasksToRemove) {
+        const task = newTasks.get(taskId)
+        if (task?.resultMessageId) {
+          newResultMsgIndex.delete(task.resultMessageId)
+        }
+        newTasks.delete(taskId)
+      }
+      state = { ...state, tasks: newTasks, taskByResultMessageId: newResultMsgIndex }
+    }
+
+    // 4. 扫描超时的活跃对话
     for (const [convId, lastActive] of lastActivityByConversation) {
       if (closedConversations.has(convId)) {
         lastActivityByConversation.delete(convId)
         continue
       }
       if (now - lastActive >= conversationTimeout) {
-        closedConversations.add(convId)
+        closedConversations.set(convId, now)
         lastActivityByConversation.delete(convId)
-        // 找到对话中最后一个任务，通知回调
         const taskIds = state.tasksByConversation.get(convId) ?? []
         const lastTask = taskIds
           .map((id) => state.tasks.get(id))

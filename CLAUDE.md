@@ -130,6 +130,7 @@ TaskRepo also provides `findRecent()` for `/history` command queries.
 | `TELEGRAM_BOT_TOKEN` | Yes | Bot token from @BotFather |
 | `DATABASE_URL` | Recommended | PostgreSQL connection string |
 | `HUB_URL` | Recommended | WebSocket URL shown in `/register` replies |
+| `HUB_SECRET` | Recommended | Webhook secret token for validating Telegram updates (auto-generated if unset) |
 | `TELEGRAM_CHAT_ID` | Optional | Default group chat for API-submitted tasks |
 | `PORT` | Auto | HTTP server port (default 9900) |
 

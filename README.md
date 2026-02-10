@@ -63,6 +63,7 @@ Railway Dashboard → Hub 服务 → Settings → Networking → Generate Domain
 | `TELEGRAM_BOT_TOKEN` | 是 | 从 @BotFather 获取 |
 | `DATABASE_URL` | 自动 | 模板已配置 |
 | `HUB_URL` | 推荐 | WebSocket 地址，显示在 /register 回复中 |
+| `HUB_SECRET` | 推荐 | Webhook 签名密钥，未设置则每次启动自动生成（重启后旧 webhook 失效） |
 | `TELEGRAM_CHAT_ID` | 可选 | 群聊 ID，确保重启后 API 任务能发到群聊 |
 
 ## 加入团队（Daemon 部署）
@@ -141,7 +142,7 @@ claude mcp add ccchat -- npx tsx /path/to/ccchat/packages/mcp/src/index.ts \
 
 ## HTTP API
 
-Bearer Token 认证。
+Bearer Token 认证，每 agent 限 60 次/分钟。
 
 | 方法 | 路径 | 说明 |
 |------|------|------|

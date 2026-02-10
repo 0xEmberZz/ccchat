@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 
 import { createServer } from "node:http"
+import { randomUUID } from "node:crypto"
 import { config } from "dotenv"
 import { createRegistry } from "./registry.js"
 import { createTaskQueue } from "./task-queue.js"
@@ -21,18 +22,23 @@ import { createApiHandler, onApiTaskCreated } from "./api.js"
 config()
 
 // 从环境变量读取配置
-function loadConfig(): { readonly port: number; readonly telegramBotToken: string; readonly hubUrl?: string; readonly databaseUrl?: string; readonly telegramChatId?: number } {
+function loadConfig(): { readonly port: number; readonly telegramBotToken: string; readonly hubUrl?: string; readonly databaseUrl?: string; readonly telegramChatId?: number; readonly webhookSecret: string } {
   const port = parseInt(process.env.PORT ?? process.env.HUB_PORT ?? "9900", 10)
   const telegramBotToken = process.env.TELEGRAM_BOT_TOKEN ?? ""
   const hubUrl = process.env.HUB_URL
   const databaseUrl = process.env.DATABASE_URL
   const telegramChatId = process.env.TELEGRAM_CHAT_ID ? parseInt(process.env.TELEGRAM_CHAT_ID, 10) : undefined
+  const webhookSecret = process.env.HUB_SECRET || randomUUID()
 
   if (!telegramBotToken) {
     throw new Error("环境变量 TELEGRAM_BOT_TOKEN 未设置")
   }
 
-  return { port, telegramBotToken, hubUrl, databaseUrl, telegramChatId }
+  if (!process.env.HUB_SECRET) {
+    process.stdout.write(`HUB_SECRET 未设置，已自动生成 webhook secret\n`)
+  }
+
+  return { port, telegramBotToken, hubUrl, databaseUrl, telegramChatId, webhookSecret }
 }
 
 // 全局错误捕获
@@ -65,7 +71,16 @@ async function main(): Promise<void> {
 
   // 创建核心模块
   const registry = createRegistry({ credentialRepo })
-  const taskQueue = createTaskQueue({ taskRepo })
+  const taskQueue = createTaskQueue({
+    taskRepo,
+    onConversationClosed: (_convId, lastTask) => {
+      process.stdout.write(`对话自动关闭: ${_convId.slice(0, 8)}... (30分钟无活动)\n`)
+      // 移除最后一条结果消息的 keyboard
+      if (lastTask.resultMessageId && botRef) {
+        botRef.removeKeyboard(lastTask.chatId, lastTask.resultMessageId)
+      }
+    },
+  })
   const agentStatusStore = createAgentStatusStore()
 
   // 从持久化层加载数据
@@ -80,6 +95,12 @@ async function main(): Promise<void> {
     const url = req.url ?? "/"
     // Webhook 路由：Telegram POST /webhook
     if (url === "/webhook" && req.method === "POST" && botRef) {
+      const secretHeader = req.headers["x-telegram-bot-api-secret-token"]
+      if (secretHeader !== hubConfig.webhookSecret) {
+        res.writeHead(403)
+        res.end("Forbidden")
+        return
+      }
       botRef.handleWebhook(req, res).catch(() => {
         res.writeHead(500)
         res.end()
@@ -98,6 +119,7 @@ async function main(): Promise<void> {
     agentStatusStore,
     hubConfig.telegramChatId,
     pool,
+    hubConfig.webhookSecret,
   )
   botRef = bot
 
@@ -105,6 +127,7 @@ async function main(): Promise<void> {
   function shutdown(): void {
     process.stdout.write("正在关闭服务...\n")
     bot.stop()
+    taskQueue.stop()
     wsServer.close()
     httpServer.close(() => {
       if (pool) {

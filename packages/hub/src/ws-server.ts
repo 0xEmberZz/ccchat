@@ -12,6 +12,7 @@ import {
 import type { Registry } from "./registry.js"
 import type { TaskQueue } from "./task-queue.js"
 import type { AgentStatusStore } from "./agent-status-store.js"
+import { createRateLimiter } from "./rate-limiter.js"
 
 // 心跳间隔 30 秒
 const HEARTBEAT_INTERVAL = 30_000
@@ -55,7 +56,10 @@ export function createWsServer(
   taskQueue: TaskQueue,
   agentStatusStore?: AgentStatusStore,
 ): WsServer {
-  const wss = new WebSocketServer({ server: httpServer })
+  const wss = new WebSocketServer({ server: httpServer, maxPayload: 1_048_576 })
+  // 速率限制：连接 per IP (20/60s)，消息 per agent (100/10s)
+  const connRateLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 20 })
+  const msgRateLimiter = createRateLimiter({ windowMs: 10_000, maxRequests: 100 })
   let taskResultCallback: TaskResultCallback | undefined
   let taskCancelledCallback: TaskCancelledCallback | undefined
   let taskProgressCallback: TaskProgressCallback | undefined
@@ -222,8 +226,23 @@ export function createWsServer(
   }
 
   // 处理新连接
-  function handleConnection(ws: WebSocket, _req: IncomingMessage): void {
+  function handleConnection(ws: WebSocket, req: IncomingMessage): void {
+    // 连接速率限制（per IP）
+    const ip = req.headers["x-forwarded-for"]?.toString().split(",")[0].trim()
+      ?? req.socket.remoteAddress
+      ?? "unknown"
+    if (!connRateLimiter.consume(ip)) {
+      ws.close(1008, "Too many connections")
+      return
+    }
+
     ws.on("message", (data: Buffer) => {
+      // 消息速率限制（per agent）
+      const agentName = registry.getAgentByWs(ws)
+      if (agentName && !msgRateLimiter.consume(agentName)) {
+        return // 超限，静默丢弃
+      }
+
       let msg: AgentToHubMessage
       try {
         msg = parseAgentMessage(data.toString())
@@ -288,6 +307,8 @@ export function createWsServer(
     },
     close: () => {
       if (heartbeatTimer) clearInterval(heartbeatTimer)
+      connRateLimiter.destroy()
+      msgRateLimiter.destroy()
       wss.close()
     },
   }

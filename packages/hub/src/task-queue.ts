@@ -61,16 +61,24 @@ export interface TaskQueue {
   readonly clearAttachments: (taskId: string) => void
   // 持久化
   readonly loadFromRepo: () => Promise<void>
+  // 清理
+  readonly stop: () => void
 }
 
 export interface TaskQueueOptions {
   readonly taskRepo?: TaskRepo
+  /** 对话超时自动关闭（毫秒），默认 30 分钟 */
+  readonly conversationTimeout?: number
+  /** 对话超时关闭时的回调 */
+  readonly onConversationClosed?: (conversationId: string, lastTask: TaskInfo) => void
 }
 
 // 创建任务队列实例
 export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
   const repo = options?.taskRepo
+  const conversationTimeout = options?.conversationTimeout ?? 30 * 60 * 1000
   const closedConversations = new Set<string>()
+  const lastActivityByConversation = new Map<string, number>()
   const attachments = new Map<string, ReadonlyArray<TaskAttachment>>()
 
   let state: TaskQueueState = {
@@ -116,6 +124,7 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     const newIndex = new Map(state.tasksByConversation)
     newIndex.set(task.conversationId, [...existing, task.taskId])
     state = { ...state, tasksByConversation: newIndex }
+    lastActivityByConversation.set(task.conversationId, Date.now())
   }
 
   function indexResultMessageId(taskId: string, msgId: number): void {
@@ -207,6 +216,9 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     persistTaskUpdate(updated)
     if (isTerminal) {
       attachments.delete(taskId)
+    }
+    if (isCompleted && existing.conversationId) {
+      lastActivityByConversation.set(existing.conversationId, Date.now())
     }
     return updated
   }
@@ -341,6 +353,31 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     attachments.delete(taskId)
   }
 
+  // 定时扫描超时对话（每分钟检查一次）
+  const sweepInterval = setInterval(() => {
+    const now = Date.now()
+    for (const [convId, lastActive] of lastActivityByConversation) {
+      if (closedConversations.has(convId)) {
+        lastActivityByConversation.delete(convId)
+        continue
+      }
+      if (now - lastActive >= conversationTimeout) {
+        closedConversations.add(convId)
+        lastActivityByConversation.delete(convId)
+        // 找到对话中最后一个任务，通知回调
+        const taskIds = state.tasksByConversation.get(convId) ?? []
+        const lastTask = taskIds
+          .map((id) => state.tasks.get(id))
+          .filter((t): t is TaskInfo => t !== undefined)
+          .at(-1)
+        if (lastTask && options?.onConversationClosed) {
+          options.onConversationClosed(convId, lastTask)
+        }
+      }
+    }
+  }, 60_000)
+  sweepInterval.unref()
+
   return {
     createTask: (params: CreateTaskParams) => {
       const { task, persisted } = createTask(params)
@@ -363,5 +400,6 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     getAttachments,
     clearAttachments,
     loadFromRepo,
+    stop: () => clearInterval(sweepInterval),
   }
 }

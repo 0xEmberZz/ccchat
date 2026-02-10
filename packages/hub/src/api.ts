@@ -1,6 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http"
 import type { Registry } from "./registry.js"
 import type { TaskQueue } from "./task-queue.js"
+import { createRateLimiter } from "./rate-limiter.js"
 
 interface ApiDeps {
   readonly registry: Registry
@@ -46,6 +47,9 @@ function authenticate(req: IncomingMessage, registry: Registry): string | undefi
   return registry.getAgentByToken(token)
 }
 
+// HTTP API 速率限制：每 agent 60 次/60秒
+const apiRateLimiter = createRateLimiter({ windowMs: 60_000, maxRequests: 60 })
+
 /** 创建 HTTP API 请求处理器 */
 export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: ServerResponse) => void {
   const { registry, taskQueue } = deps
@@ -71,6 +75,13 @@ export function createApiHandler(deps: ApiDeps): (req: IncomingMessage, res: Ser
       const agentName = authenticate(req, registry)
       if (!agentName) {
         sendJson(res, 401, { error: "未认证，请提供有效的 Bearer token" })
+        return
+      }
+
+      // 速率限制
+      if (!apiRateLimiter.consume(agentName)) {
+        res.setHeader("Retry-After", "60")
+        sendJson(res, 429, { error: "请求过于频繁，请稍后再试" })
         return
       }
 

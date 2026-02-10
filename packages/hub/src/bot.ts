@@ -23,6 +23,7 @@ export interface TelegramBot {
   readonly start: () => Promise<void>
   readonly stop: () => void
   readonly handleWebhook: (req: IncomingMessage, res: ServerResponse) => Promise<void>
+  readonly removeKeyboard: (chatId: number, messageId: number) => void
 }
 
 // 友好时间格式
@@ -137,6 +138,7 @@ export function createBot(
   agentStatusStore?: AgentStatusStore,
   defaultChatId?: number,
   pool?: DbPool,
+  webhookSecret?: string,
 ): TelegramBot {
   const bot = new Bot(token)
   bot.catch((err) => {
@@ -1098,6 +1100,7 @@ export function createBot(
           "inline_query",
           "my_chat_member",
         ],
+        ...(webhookSecret ? { secret_token: webhookSecret } : {}),
       })
       process.stdout.write(`Telegram Bot Webhook 已设置: ${webhookUrl}\n`)
     },
@@ -1107,6 +1110,9 @@ export function createBot(
     },
     handleWebhook: async (req: IncomingMessage, res: ServerResponse) => {
       await handleUpdate(req, res)
+    },
+    removeKeyboard: (chatId: number, messageId: number) => {
+      bot.api.editMessageReplyMarkup(chatId, messageId, { reply_markup: undefined }).catch(() => {})
     },
   }
 }

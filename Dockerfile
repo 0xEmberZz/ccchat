@@ -21,6 +21,7 @@ RUN corepack enable && corepack prepare pnpm@10.27.0 --activate
 WORKDIR /app
 
 COPY --from=base /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./
+COPY --from=base /app/patches/ patches/
 COPY --from=base /app/packages/shared/package.json packages/shared/
 COPY --from=base /app/packages/shared/dist packages/shared/dist/
 COPY --from=base /app/packages/hub/package.json packages/hub/

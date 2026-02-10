@@ -4,6 +4,7 @@ WORKDIR /app
 
 # 安装依赖
 COPY package.json pnpm-workspace.yaml pnpm-lock.yaml ./
+COPY patches/ patches/
 COPY packages/shared/package.json packages/shared/
 COPY packages/hub/package.json packages/hub/
 RUN pnpm install --frozen-lockfile --prod=false

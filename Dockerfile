@@ -1,5 +1,5 @@
 FROM node:20-slim AS base
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.27.0 --activate
 WORKDIR /app
 
 # 安装依赖
@@ -16,7 +16,7 @@ RUN pnpm --filter @ccchat/shared build && pnpm --filter @ccchat/hub build
 
 # 生产阶段
 FROM node:20-slim AS runner
-RUN corepack enable && corepack prepare pnpm@latest --activate
+RUN corepack enable && corepack prepare pnpm@10.27.0 --activate
 WORKDIR /app
 
 COPY --from=base /app/package.json /app/pnpm-workspace.yaml /app/pnpm-lock.yaml ./

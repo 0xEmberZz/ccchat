@@ -164,7 +164,7 @@ export function createBot(
   // 清理进度消息
   async function cleanupProgress(taskId: string): Promise<void> {
     const pState = progressState.get(taskId)
-    if (pState?.progressMsgId) {
+    if (pState?.progressMsgId && pState.progressMsgId !== -1) {
       try {
         await bot.api.deleteMessage(pState.chatId, pState.progressMsgId)
       } catch {
@@ -895,9 +895,11 @@ export function createBot(
     const text = `${statusText}... (${elapsed})`
 
     try {
-      if (pState.progressMsgId) {
+      if (pState.progressMsgId && pState.progressMsgId !== -1) {
         await bot.api.editMessageText(pState.chatId, pState.progressMsgId, text)
-      } else {
+      } else if (!pState.progressMsgId) {
+        // 立即设占位值，防止并发 sendMessage 产生多条消息
+        pState.progressMsgId = -1
         const sent = await bot.api.sendMessage(pState.chatId, text, {
           reply_to_message_id: pState.replyToMsgId,
         })

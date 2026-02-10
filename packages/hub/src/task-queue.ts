@@ -57,10 +57,10 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     taskByResultMessageId: new Map(),
   }
 
-  // 异步持久化
-  function persistTask(task: TaskInfo): void {
-    if (!repo) return
-    repo.save(task).catch((err) => {
+  // 异步持久化（返回 Promise 供需要顺序依赖的场景 await）
+  function persistTask(task: TaskInfo): Promise<void> {
+    if (!repo) return Promise.resolve()
+    return repo.save(task).catch((err) => {
       process.stderr.write(`DB task save failed: ${err}\n`)
     })
   }
@@ -72,9 +72,9 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     })
   }
 
-  function persistPendingAdd(agentName: string, taskId: string): void {
-    if (!repo) return
-    repo.savePending(agentName, taskId).catch((err) => {
+  function persistPendingAdd(agentName: string, taskId: string): Promise<void> {
+    if (!repo) return Promise.resolve()
+    return repo.savePending(agentName, taskId).catch((err) => {
       process.stderr.write(`DB pending save failed: ${err}\n`)
     })
   }
@@ -135,7 +135,7 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     process.stdout.write(`Loaded ${tasks.length} tasks from DB\n`)
   }
 
-  function createTask(params: CreateTaskParams): TaskInfo {
+  function createTask(params: CreateTaskParams): { readonly task: TaskInfo; readonly persisted: Promise<void> } {
     const taskId = randomUUID()
     const conversationId = params.conversationId ?? randomUUID()
     const task: TaskInfo = {
@@ -154,8 +154,8 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     newTasks.set(taskId, task)
     state = { ...state, tasks: newTasks }
     indexConversation(task)
-    persistTask(task)
-    return task
+    const persisted = persistTask(task)
+    return { task, persisted }
   }
 
   function getTask(taskId: string): TaskInfo | undefined {
@@ -184,12 +184,17 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
     return updated
   }
 
-  function addPending(agentName: string, taskId: string): void {
+  function addPending(agentName: string, taskId: string, afterPersist?: Promise<void>): void {
     const existing = state.pendingByAgent.get(agentName) ?? []
     const newPending = new Map(state.pendingByAgent)
     newPending.set(agentName, [...existing, taskId])
     state = { ...state, pendingByAgent: newPending }
-    persistPendingAdd(agentName, taskId)
+    // 等 task 写入 DB 后再写 pending（外键依赖）
+    if (afterPersist) {
+      afterPersist.then(() => persistPendingAdd(agentName, taskId))
+    } else {
+      persistPendingAdd(agentName, taskId)
+    }
   }
 
   function getPendingTasks(agentName: string): ReadonlyArray<TaskInfo> {
@@ -244,8 +249,8 @@ export function createTaskQueue(options?: TaskQueueOptions): TaskQueue {
 
   return {
     createTask: (params: CreateTaskParams) => {
-      const task = createTask(params)
-      addPending(params.to, task.taskId)
+      const { task, persisted } = createTask(params)
+      addPending(params.to, task.taskId, persisted)
       return task
     },
     getTask,

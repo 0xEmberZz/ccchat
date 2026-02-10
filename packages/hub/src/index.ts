@@ -35,6 +35,14 @@ function loadConfig(): { readonly port: number; readonly telegramBotToken: strin
   return { port, telegramBotToken, hubUrl, databaseUrl, telegramChatId }
 }
 
+// 全局错误捕获
+process.on("uncaughtException", (err) => {
+  process.stderr.write(`[FATAL] uncaughtException: ${err.stack ?? err.message}\n`)
+})
+process.on("unhandledRejection", (reason) => {
+  process.stderr.write(`[FATAL] unhandledRejection: ${reason}\n`)
+})
+
 // 主启动函数
 async function main(): Promise<void> {
   const hubConfig = loadConfig()
@@ -67,7 +75,17 @@ async function main(): Promise<void> {
   }
 
   const apiHandler = createApiHandler({ registry, taskQueue })
+  let botRef: ReturnType<typeof createBot> | undefined
   const httpServer = createServer((req, res) => {
+    const url = req.url ?? "/"
+    // Webhook 路由：Telegram POST /webhook
+    if (url === "/webhook" && req.method === "POST" && botRef) {
+      botRef.handleWebhook(req, res).catch(() => {
+        res.writeHead(500)
+        res.end()
+      })
+      return
+    }
     apiHandler(req, res)
   })
   const wsServer = createWsServer(httpServer, registry, taskQueue, agentStatusStore)
@@ -80,8 +98,9 @@ async function main(): Promise<void> {
     agentStatusStore,
     hubConfig.telegramChatId,
   )
+  botRef = bot
 
-  // 优雅退出（必须在 bot.start 前注册）
+  // 优雅退出
   function shutdown(): void {
     process.stdout.write("正在关闭服务...\n")
     bot.stop()
@@ -107,31 +126,8 @@ async function main(): Promise<void> {
     process.stdout.write(`Hub WebSocket 服务已启动，端口: ${hubConfig.port}\n`)
   })
 
-  // 启动 Telegram Bot（带重试，处理滚动部署冲突）
-  await startBotWithRetry(bot, 5, 5_000)
-}
-
-// Bot 启动重试（处理 409 Conflict）
-async function startBotWithRetry(
-  bot: { readonly start: () => Promise<void> },
-  maxRetries: number,
-  delayMs: number,
-): Promise<void> {
-  for (let attempt = 1; attempt <= maxRetries; attempt++) {
-    try {
-      process.stdout.write(`Telegram Bot 启动中... (${attempt}/${maxRetries})\n`)
-      await bot.start()
-      return
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err)
-      if (msg.includes("409") && attempt < maxRetries) {
-        process.stdout.write(`Bot 冲突，${delayMs / 1000}s 后重试...\n`)
-        await new Promise((r) => setTimeout(r, delayMs))
-        continue
-      }
-      throw err
-    }
-  }
+  // 初始化 Bot（Webhook 模式，不会阻塞）
+  await bot.start()
 }
 
 main().catch((err: unknown) => {

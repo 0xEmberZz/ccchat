@@ -1,4 +1,5 @@
-import { Bot, InlineKeyboard } from "grammy"
+import { Bot, InlineKeyboard, webhookCallback } from "grammy"
+import type { IncomingMessage, ServerResponse } from "node:http"
 import type { TaskMessage } from "@ccchat/shared"
 import type { Registry } from "./registry.js"
 import type { TaskQueue } from "./task-queue.js"
@@ -8,21 +9,7 @@ import { buildConversationContext } from "./conversation.js"
 import { formatResult, formatResultPlain } from "./formatter.js"
 import { createPaginator } from "./paginator.js"
 import { onApiTaskCreated } from "./api.js"
-
-// 广播通知到所有活跃群组
-async function broadcastNotification(
-  bot: Bot,
-  chatIds: ReadonlySet<number>,
-  text: string,
-): Promise<void> {
-  for (const chatId of chatIds) {
-    try {
-      await bot.api.sendMessage(chatId, text)
-    } catch {
-      // 发送失败时静默处理
-    }
-  }
-}
+import { createStatusPanel } from "./status-panel.js"
 
 // 解析 @mention 结果
 interface MentionParseResult {
@@ -34,12 +21,21 @@ interface MentionParseResult {
 export interface TelegramBot {
   readonly start: () => Promise<void>
   readonly stop: () => void
+  readonly handleWebhook: (req: IncomingMessage, res: ServerResponse) => Promise<void>
 }
 
-// 解析 @agentname 消息
-function parseMention(text: string): MentionParseResult | undefined {
+// 解析 @agentname 消息（跳过 bot 自身用户名）
+function parseMention(text: string, botUsername?: string): MentionParseResult | undefined {
   const match = text.match(/^@(\w+)\s+(.+)$/s)
   if (!match) return undefined
+  // 如果第一个 @mention 是 bot 自身，跳过并解析下一个
+  if (botUsername && match[1].toLowerCase() === botUsername.toLowerCase()) {
+    const rest = match[2].trim()
+    // rest 可能是 "agent_name content" 或 "@agent_name content"
+    const innerMatch = rest.match(/^@?(\w+)\s+(.+)$/s)
+    if (!innerMatch) return undefined
+    return { agentName: innerMatch[1], content: innerMatch[2].trim() }
+  }
   return { agentName: match[1], content: match[2].trim() }
 }
 
@@ -66,6 +62,16 @@ function dispatchTaskToAgent(
   return sent
 }
 
+// 给消息添加 reaction
+async function addReaction(bot: Bot, chatId: number, messageId: number, emoji: string): Promise<void> {
+  try {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await bot.api.setMessageReaction(chatId, messageId, [{ type: "emoji", emoji } as any])
+  } catch {
+    // Reaction API 可能不可用（旧群组或权限不足），静默忽略
+  }
+}
+
 // 创建 Telegram Bot
 export function createBot(
   token: string,
@@ -82,6 +88,7 @@ export function createBot(
   })
   const activeChatIds = new Set<number>(defaultChatId ? [defaultChatId] : [])
   const paginator = createPaginator()
+  const statusPanel = createStatusPanel(bot, registry, agentStatusStore)
 
   // /register 命令：注册 Agent 并获取 token（必须私聊）
   bot.command("register", async (ctx) => {
@@ -137,7 +144,6 @@ export function createBot(
     if (!userId) return
 
     if (sub === "refresh") {
-      // 从所有凭证中找到该用户拥有的 agent（不限在线）
       const credential = registry.findCredentialByUserId(userId)
 
       if (!credential) {
@@ -234,7 +240,6 @@ export function createBot(
       return
     }
 
-    // 验证权限：只有 Agent 主人可以取消
     const userId = ctx.from?.id
     const ownerTelegramId = registry.getTelegramUserId(task.to)
     if (ownerTelegramId && userId !== ownerTelegramId) {
@@ -243,21 +248,79 @@ export function createBot(
     }
 
     if (task.status === "running") {
-      // 发送取消指令给 Agent
       const sent = wsServer.cancelTask(task.to, taskId)
       if (sent) {
         await ctx.reply(`已发送取消请求: ${taskId}`)
       } else {
-        // Agent 离线，直接标记取消
         taskQueue.updateStatus(taskId, "cancelled")
         await ctx.reply(`Agent 离线，任务已直接取消: ${taskId}`)
       }
     } else {
-      // 未开始运行的任务直接取消
       taskQueue.updateStatus(taskId, "cancelled")
       taskQueue.removePending(task.to, taskId)
       await ctx.reply(`任务已取消: ${taskId}`)
     }
+  })
+
+  // Inline Mode：在任意聊天中 @bot agent_name 任务内容
+  bot.on("inline_query", async (ctx) => {
+    const query = ctx.inlineQuery.query.trim()
+    const agents = registry.listAgents()
+
+    // 解析：agent名 + 可选任务内容
+    const spaceIdx = query.indexOf(" ")
+    const agentQuery = query
+      ? (spaceIdx >= 0 ? query.slice(0, spaceIdx) : query).replace(/^@/, "")
+      : ""
+    const taskContent = spaceIdx >= 0 ? query.slice(spaceIdx + 1).trim() : ""
+    const matched = agentQuery
+      ? agents.filter((a) => a.name.toLowerCase().includes(agentQuery.toLowerCase()))
+      : agents
+
+    if (taskContent && matched.length > 0) {
+      // 有完整任务内容 → 点击直接发送任务
+      const results = matched.slice(0, 10).map((a, i) => ({
+        type: "article" as const,
+        id: String(i),
+        title: `发送给 ${a.name}: ${taskContent.slice(0, 50)}`,
+        description: "点击发送任务",
+        input_message_content: {
+          message_text: `@${a.name} ${taskContent}`,
+        },
+      }))
+      await ctx.answerInlineQuery(results, { cache_time: 10 })
+      return
+    }
+
+    // 没有任务内容 → 显示 agent 列表供参考，每个 agent 带 inline 按钮跳转
+    const agentList = matched.slice(0, 10)
+    if (agentList.length === 0) {
+      await ctx.answerInlineQuery([{
+        type: "article" as const,
+        id: "0",
+        title: "没有匹配的 Agent",
+        description: "当前没有在线的 Agent",
+        input_message_content: { message_text: "当前没有在线的 Agent" },
+      }], { cache_time: 10 })
+      return
+    }
+
+    const results = agentList.map((a, i) => ({
+      type: "article" as const,
+      id: String(i),
+      title: `${a.name} (${a.status})`,
+      description: `格式: ${a.name} 你的任务内容`,
+      input_message_content: {
+        message_text: `在线 Agent: ${agentList.map((x) => x.name).join(", ")}\n\n用法: @agent名 任务内容\n示例: @${agentList[0].name} 写一首诗`,
+      },
+      reply_markup: {
+        inline_keyboard: [[{
+          text: `📝 给 ${a.name} 发任务`,
+          switch_inline_query_current_chat: `${a.name} `,
+        }]],
+      },
+    }))
+    await ctx.answerInlineQuery(results, { cache_time: 10 })
   })
 
   // 监听普通文本消息，解析 @mention 或多轮对话回复
@@ -275,7 +338,6 @@ export function createBot(
     if (replyToMsg) {
       const parentTask = taskQueue.findTaskByResultMessageId(replyToMsg.message_id)
       if (parentTask && parentTask.conversationId) {
-        // 找到对话上下文，创建续轮任务
         const convTasks = taskQueue.getTasksByConversation(parentTask.conversationId)
         const contextContent = buildConversationContext(convTasks, text)
 
@@ -289,12 +351,12 @@ export function createBot(
           parentTaskId: parentTask.taskId,
         })
 
-        // 多轮对话自动批准（首轮已审批过）
         taskQueue.updateStatus(task.taskId, "approved")
 
         if (registry.isOnline(parentTask.to)) {
           const sent = dispatchTaskToAgent(task, parentTask.to, wsServer, taskQueue)
           if (sent) {
+            await addReaction(bot, chatId, messageId, "👀")
             await ctx.reply(`继续对话: ${parentTask.to}\nID: ${task.taskId}`, {
               reply_to_message_id: messageId,
             })
@@ -309,12 +371,14 @@ export function createBot(
     }
 
     // 普通 @mention 消息
-    const mention = parseMention(text)
+    const mention = parseMention(text, bot.botInfo?.username)
     if (!mention) return
 
     const { agentName, content } = mention
 
-    // 创建任务（状态为 awaiting_approval）
+    // 给原消息加 reaction 表示已接收
+    await addReaction(bot, chatId, messageId, "👀")
+
     const task = taskQueue.createTask({
       from,
       to: agentName,
@@ -324,11 +388,9 @@ export function createBot(
     })
     taskQueue.updateStatus(task.taskId, "awaiting_approval")
 
-    // 查找 Agent 绑定的 Telegram 用户
     const ownerTelegramId = registry.getTelegramUserId(agentName)
 
     if (ownerTelegramId) {
-      // 有绑定用户 → 私聊发送审批请求
       const keyboard = new InlineKeyboard()
         .text("✅ 批准", `approve:${task.taskId}`)
         .text("❌ 拒绝", `reject:${task.taskId}`)
@@ -348,16 +410,14 @@ export function createBot(
           reply_to_message_id: messageId,
         })
       } catch {
-        // 私聊发送失败（用户未 /start bot），回退到群里发审批
         await sendGroupApproval(ctx, task, agentName, from, content, messageId)
       }
     } else {
-      // 未绑定用户 → 在群里发审批按钮
       await sendGroupApproval(ctx, task, agentName, from, content, messageId)
     }
   })
 
-  // 在群里发送审批按钮（未绑定时的回退方案）
+  // 在群里发送审批按钮
   async function sendGroupApproval(
     ctx: { readonly reply: (text: string, opts?: object) => Promise<unknown> },
     task: { readonly taskId: string },
@@ -409,7 +469,6 @@ export function createBot(
           reply_markup: keyboard,
         })
       } catch {
-        // HTML 解析失败时去掉格式
         try {
           await ctx.editMessageText(pageContent + pageInfo, {
             reply_markup: keyboard,
@@ -433,19 +492,21 @@ export function createBot(
         return
       }
 
-      // 验证是否是 Agent 主人（如果已绑定）
       const ownerTelegramId = registry.getTelegramUserId(task.to)
       if (ownerTelegramId && ownerTelegramId !== userId) {
         await ctx.answerCallbackQuery({ text: "只有 Agent 主人可以审批" })
         return
       }
 
-      // 批准任务
       taskQueue.updateStatus(taskId, "approved")
       await ctx.answerCallbackQuery({ text: "✅ 已批准" })
       await ctx.editMessageText(`✅ 任务已批准 (${task.to})\nID: ${taskId}`)
 
-      // 分发任务
+      // 给原消息加 reaction
+      if (task.chatId !== 0 && task.messageId !== 0) {
+        await addReaction(bot, task.chatId, task.messageId, "🚀")
+      }
+
       if (registry.isOnline(task.to)) {
         const sent = dispatchTaskToAgent(task, task.to, wsServer, taskQueue)
         if (sent) {
@@ -482,6 +543,11 @@ export function createBot(
       await ctx.answerCallbackQuery({ text: "❌ 已拒绝" })
       await ctx.editMessageText(`❌ 任务已拒绝 (${task.to})\nID: ${taskId}`)
 
+      // 给原消息加 ❌ reaction
+      if (task.chatId !== 0 && task.messageId !== 0) {
+        await addReaction(bot, task.chatId, task.messageId, "👎")
+      }
+
       try {
         await bot.api.sendMessage(task.chatId, `任务被 ${task.to} 拒绝。\nID: ${taskId}`, {
           reply_to_message_id: task.messageId,
@@ -491,14 +557,14 @@ export function createBot(
     }
   })
 
-  // 上下线通知
-  wsServer.onAgentOnline(async (agentName) => {
-    await broadcastNotification(bot, activeChatIds, `[上线] ${agentName} 已连接`)
+  // 上下线 → 更新状态面板
+  wsServer.onAgentOnline(() => {
+    statusPanel.scheduleUpdate(activeChatIds)
   })
 
-  wsServer.onAgentOffline(async (agentName) => {
+  wsServer.onAgentOffline((agentName) => {
     agentStatusStore?.remove(agentName)
-    await broadcastNotification(bot, activeChatIds, `[下线] ${agentName} 已断开`)
+    statusPanel.scheduleUpdate(activeChatIds)
   })
 
   // 发送任务结果到指定 chat（带格式化和分页）
@@ -550,25 +616,30 @@ export function createBot(
         taskQueue.setResultMessageId(taskId, sentMsg.message_id)
       }
     }
+
+    // 任务完成后给原消息加 ✅ reaction
+    if (replyToMessageId) {
+      const emoji = status === "success" ? "✅" : "❌"
+      await addReaction(bot, targetChatId, replyToMessageId, emoji)
+    }
   }
 
-  // 任务结果回调 → 回复到 Telegram（带格式化和分页）
+  // 任务结果回调
   wsServer.onTaskResult(async (taskId, result, status, chatId, messageId) => {
     const task = taskQueue.getTask(taskId)
     const agentName = task?.to ?? "unknown"
 
+    // 更新状态面板（任务完成）
+    statusPanel.scheduleUpdate(activeChatIds)
+
     try {
       if (chatId !== 0) {
-        // 正常情况：发送到原聊天
         await sendTaskResult(taskId, agentName, result, status, chatId, messageId)
       } else {
-        // chatId=0 说明是 API 提交且 Hub 重启后还没收到群消息
-        // fallback: 发给 owner 私聊
         const ownerTelegramId = task ? registry.getTelegramUserId(task.to) : undefined
         if (ownerTelegramId) {
           await sendTaskResult(taskId, agentName, result, status, ownerTelegramId)
         }
-        // 同时尝试发到群聊（如果此时已有 activeChatIds）
         const groupChatId = activeChatIds.values().next().value
         if (groupChatId !== undefined && groupChatId !== ownerTelegramId) {
           await sendTaskResult(taskId, agentName, result, status, groupChatId)
@@ -602,7 +673,6 @@ export function createBot(
       `ID: ${event.taskId}`,
     ].join("\n")
 
-    // 发送到群聊（取第一个活跃群）并回填 chatId
     const groupChatId = activeChatIds.values().next().value
     if (groupChatId !== undefined) {
       try {
@@ -615,7 +685,6 @@ export function createBot(
       }
     }
 
-    // 同时私聊通知 Agent 主人
     try {
       await bot.api.sendMessage(event.ownerTelegramId, approvalText, {
         reply_markup: keyboard,
@@ -625,8 +694,15 @@ export function createBot(
     }
   })
 
+  // Webhook handler（必须在所有 handler 注册之后创建）
+  const handleUpdate = webhookCallback(bot, "http")
+
   return {
     start: async () => {
+      // 1. 初始化 Bot（获取 bot info，注册 handler）
+      await bot.init()
+
+      // 2. 设置 Bot 命令菜单
       await bot.api.setMyCommands([
         { command: "register", description: "注册 Agent 并获取 Token（私聊）" },
         { command: "token", description: "刷新 Token（私聊）" },
@@ -634,10 +710,38 @@ export function createBot(
         { command: "status", description: "查看任务状态" },
         { command: "cancel", description: "取消任务" },
       ])
-      await bot.start()
+
+      // 3. 设置 Bot 描述信息
+      try {
+        await bot.api.setMyDescription(
+          "CCChat - 跨主机 Claude Code 协作工具。通过 Telegram 群组 @mention 给 AI Agent 派任务，支持审批、多轮对话、结果格式化。私聊我 /register 注册你的 Agent。",
+        )
+        await bot.api.setMyShortDescription(
+          "跨主机 Claude Code 协作 | @mention 派任务 | 私聊 /register 注册",
+        )
+      } catch { /* 非关键操作 */ }
+
+      // 4. 设置 Webhook
+      if (!hubUrl) {
+        throw new Error("HUB_URL 未设置，Webhook 模式需要公网 HTTPS 地址")
+      }
+      const webhookUrl = hubUrl.replace(/^wss:\/\//, "https://").replace(/^ws:\/\//, "http://") + "/webhook"
+      await bot.api.setWebhook(webhookUrl, {
+        allowed_updates: [
+          "message",
+          "callback_query",
+          "inline_query",
+          "my_chat_member",
+        ],
+      })
+      process.stdout.write(`Telegram Bot Webhook 已设置: ${webhookUrl}\n`)
     },
     stop: () => {
-      bot.stop()
+      // Webhook 模式下 stop 不需要额外操作
+      // 新实例启动时 setWebhook 会自动覆盖
+    },
+    handleWebhook: async (req: IncomingMessage, res: ServerResponse) => {
+      await handleUpdate(req, res)
     },
   }
 }

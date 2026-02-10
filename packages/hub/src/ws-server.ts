@@ -54,7 +54,7 @@ export function createWsServer(
   let agentOfflineCallback: AgentStatusCallback | undefined
   let heartbeatTimer: ReturnType<typeof setInterval> | undefined
   const lastOnlineNotify = new Map<string, number>()
-  const ONLINE_NOTIFY_DEBOUNCE = 60_000 // 60 秒内不重复通知
+  const ONLINE_NOTIFY_DEBOUNCE = 5_000 // 5 秒内不重复通知（状态面板自带 2s 防抖）
 
   // 发送消息给指定 Agent
   function sendToAgent(agentName: string, msg: HubToAgentMessage): boolean {
